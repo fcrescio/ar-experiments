@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <title>Three.js WebXR AR Character (Random Walk)</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      font-family: system-ui, sans-serif;
+    }
+    #overlay {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #fff;
+      font-size: 13px;
+      border-radius: 4px;
+      z-index: 10;
+      max-width: 260px;
+    }
+  </style>
+
+  <!-- Import map per three.js + addons (ARButton, GLTFLoader, ecc.) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="overlay">
+    <b>WebXR AR - Random Walk</b><br>
+    • Punta la scrivania finché vedi il cerchio verde.<br>
+    • Tocca lo schermo / premi il trigger per<br>
+      piazzare il personaggio.<br>
+    • Poi lui inizierà a camminare a caso sulla scrivania :)<br>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { ARButton } from 'three/addons/webxr/ARButton.js';
+
+    // Nomi delle animazioni nel GLB
+    const ANIMATION_NAMES = {
+      idle: 'Idle_Loop',
+      walk: 'Walk_Loop',
+      run:  'Jog_Fwd_Loop',
+    };
+
+    let camera, scene, renderer;
+    let character;
+    let mixer;
+    const actions = {};
+    let currentAction;
+
+    // Reticolo AR
+    let reticle;
+    let hitTestSource = null;
+    let hitTestSourceRequested = false;
+
+    let controller;
+
+    const clock = new THREE.Clock();
+
+    // Stato per il wandering
+    let characterPlaced = false;
+    let wanderCenter = new THREE.Vector3(); // centro del "mondo" del personaggio
+    let wanderRadius = 0.4;                 // raggio (in metri) del movimento casuale
+    let wanderTarget = null;                // punto attuale verso cui cammina
+    const WALK_SPEED = 0.25;                // m/s (abbastanza lento da sembrare "sulla scrivania")
+
+    init();
+    animate();
+
+    function init() {
+      // Scena
+      scene = new THREE.Scene();
+
+      // Camera (WebXR la sovrascrive in runtime, ma serve lo stesso)
+      camera = new THREE.PerspectiveCamera(
+        70,
+        window.innerWidth / window.innerHeight,
+        0.01,
+        20
+      );
+
+      // Luci base
+      const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.8);
+      scene.add(hemiLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(1, 2, 1);
+      scene.add(dirLight);
+
+      // Renderer
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      // Bottone per avviare AR
+      document.body.appendChild(
+        ARButton.createButton(renderer, {
+          requiredFeatures: ['hit-test']
+        })
+      );
+
+      // Reticolo (cerchio sul piano trovato dall'hit-test)
+      const ringGeo = new THREE.RingGeometry(0.07, 0.09, 32).rotateX(-Math.PI / 2);
+      const ringMat = new THREE.MeshBasicMaterial({
+        color: 0x00ff00,
+        side: THREE.DoubleSide
+      });
+      reticle = new THREE.Mesh(ringGeo, ringMat);
+      reticle.matrixAutoUpdate = false;
+      reticle.visible = false;
+      scene.add(reticle);
+
+      // Controller XR (screen / trigger)
+      controller = renderer.xr.getController(0);
+      controller.addEventListener('select', onSelect);
+      scene.add(controller);
+
+      // Carica il modello
+      const loader = new GLTFLoader();
+      loader.load(
+        'models/character.glb',
+        (gltf) => {
+          character = gltf.scene;
+          character.traverse((obj) => {
+            if (obj.isMesh) {
+              obj.castShadow = true;
+              obj.receiveShadow = true;
+            }
+          });
+
+          // Scala più piccola per stare bene sulla scrivania
+          character.scale.set(0.5, 0.5, 0.5);
+          character.visible = false;
+          scene.add(character);
+
+          // Animazioni
+          mixer = new THREE.AnimationMixer(character);
+          const clips = gltf.animations;
+          console.log('Animazioni nel GLB:', clips.map(c => c.name));
+
+          function addAction(label, clipName) {
+            const clip = THREE.AnimationClip.findByName(clips, clipName);
+            if (clip) {
+              actions[label] = mixer.clipAction(clip);
+            } else {
+              console.warn(`Clip "${clipName}" non trovata nel GLB.`);
+            }
+          }
+
+          addAction('idle', ANIMATION_NAMES.idle);
+          addAction('walk', ANIMATION_NAMES.walk);
+          addAction('run',  ANIMATION_NAMES.run);
+
+          // Partiamo con idle (anche se invisibile finché non viene piazzato)
+          if (actions.idle) {
+            currentAction = actions.idle;
+            currentAction.play();
+          } else if (clips[0]) {
+            currentAction = mixer.clipAction(clips[0]);
+            currentAction.play();
+          }
+        },
+        (xhr) => {
+          console.log(`Caricamento GLB: ${ (xhr.loaded / xhr.total * 100).toFixed(0) }%`);
+        },
+        (error) => {
+          console.error('Errore caricamento GLB:', error);
+        }
+      );
+
+      window.addEventListener('resize', onWindowResize);
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    // Tap / trigger: piazza il personaggio dove si trova il reticolo
+    function onSelect() {
+      if (!reticle.visible || !character) return;
+
+      const pos = new THREE.Vector3();
+      pos.setFromMatrixPosition(reticle.matrix);
+
+      character.position.copy(pos);
+      character.visible = true;
+
+      // Orientalo grosso modo verso la camera
+      const camDir = new THREE.Vector3(0, 0, -1).applyQuaternion(camera.quaternion);
+      const angle = Math.atan2(camDir.x, camDir.z);
+      character.rotation.y = angle;
+
+      // Imposta centro e inizia il wandering
+      wanderCenter.copy(character.position);
+      wanderTarget = null;
+      characterPlaced = true;
+
+      // Passiamo in animazione "walk" (cammina sempre lentamente)
+      if (actions.walk) {
+        switchAction('walk');
+      }
+    }
+
+    function switchAction(name) {
+      const newAction = actions[name];
+      if (!newAction || newAction === currentAction) return;
+
+      newAction.reset().play();
+      if (currentAction) {
+        currentAction.crossFadeTo(newAction, 0.2, false);
+      }
+      currentAction = newAction;
+    }
+
+    // Sceglie un nuovo punto casuale attorno al centro
+    function pickNewWanderTarget() {
+      if (!characterPlaced) return;
+
+      const angle = Math.random() * Math.PI * 2;
+      const radius = wanderRadius * (0.4 + Math.random() * 0.6); // evita sempre il centro preciso
+
+      const target = wanderCenter.clone();
+      target.x += Math.cos(angle) * radius;
+      target.z += Math.sin(angle) * radius;
+      // Manteniamo la stessa altezza del centro (il piano della scrivania)
+      target.y = wanderCenter.y;
+
+      wanderTarget = target;
+    }
+
+    // Aggiorna il movimento casuale
+    function updateWander(delta) {
+      if (!characterPlaced || !character) return;
+
+      if (!wanderTarget) {
+        pickNewWanderTarget();
+        return;
+      }
+
+      const pos = character.position;
+      const toTarget = new THREE.Vector3().subVectors(wanderTarget, pos);
+      const dist = toTarget.length();
+
+      // Se siamo arrivati vicino al target, scegli un nuovo punto
+      if (dist < 0.02) {
+        // ogni tanto mettiamolo in idle un attimo
+        if (Math.random() < 0.3 && actions.idle && actions.walk) {
+          switchAction('idle');
+          // dopo un breve idle (simulato col tempo), tornerà a camminare
+          setTimeout(() => {
+            if (characterPlaced && actions.walk) {
+              switchAction('walk');
+            }
+          }, 1000 + Math.random() * 1500);
+        }
+        pickNewWanderTarget();
+        return;
+      }
+
+      // Direzione di movimento
+      toTarget.normalize();
+
+      // Rotazione verso il target
+      const angle = Math.atan2(toTarget.x, toTarget.z);
+      character.rotation.y = angle;
+
+      // Spostamento
+      const move = WALK_SPEED * delta;
+      pos.x += toTarget.x * move;
+      pos.z += toTarget.z * move;
+      // y la teniamo fissa (nessuna salita/discesa)
+      pos.y = wanderCenter.y;
+    }
+
+    function animate() {
+      renderer.setAnimationLoop(renderXR);
+    }
+
+    function renderXR(timestamp, frame) {
+      const delta = clock.getDelta();
+
+      if (mixer) mixer.update(delta);
+      updateWander(delta);
+
+      if (frame) {
+        const referenceSpace = renderer.xr.getReferenceSpace();
+        const session = renderer.xr.getSession();
+
+        if (!hitTestSourceRequested) {
+          session.requestReferenceSpace('viewer').then((refSpace) => {
+            session.requestHitTestSource({ space: refSpace }).then((source) => {
+              hitTestSource = source;
+            });
+          });
+
+          session.addEventListener('end', () => {
+            hitTestSourceRequested = false;
+            hitTestSource = null;
+          });
+
+          hitTestSourceRequested = true;
+        }
+
+        if (hitTestSource) {
+          const hitTestResults = frame.getHitTestResults(hitTestSource);
+
+          if (hitTestResults.length > 0) {
+            const hit = hitTestResults[0];
+            const pose = hit.getPose(referenceSpace);
+
+            reticle.visible = true;
+            reticle.matrix.fromArray(pose.transform.matrix);
+          } else {
+            reticle.visible = false;
+          }
+        }
+      }
+
+      renderer.render(scene, camera);
+    }
+  </script>
+</body>
+</html>

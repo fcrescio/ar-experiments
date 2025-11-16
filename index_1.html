@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <title>Three.js Character Controller</title>
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      font-family: system-ui, sans-serif;
+    }
+    #overlay {
+      position: fixed;
+      top: 10px;
+      left: 10px;
+      padding: 8px 12px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #fff;
+      font-size: 13px;
+      border-radius: 4px;
+      z-index: 10;
+      max-width: 260px;
+    }
+  </style>
+
+  <!-- IMPORT MAP: dice al browser dove trovare "three" e gli addons -->
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="overlay">
+    <b>Comandi</b><br>
+    W / A / S / D = movimento<br>
+    Shift = corsa (Jog_Fwd_Loop)<br>
+    Mouse = ruota / zoom (OrbitControls)<br>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+    // === CONFIGURAZIONE ANIMAZIONI (usa i nomi del tuo GLB) ===
+    const ANIMATION_NAMES = {
+      idle: 'Idle_Loop',
+      walk: 'Walk_Loop',
+      run:  'Jog_Fwd_Loop',
+    };
+
+    // === VARIABILI GLOBALI SCENA ===
+    let scene, camera, renderer, controls;
+    let clock = new THREE.Clock();
+
+    let character;       // 3D model del personaggio
+    let mixer;           // AnimationMixer
+    const actions = {};  // mappa nome -> AnimationAction
+    let currentAction;   // azione attualmente attiva
+
+    // Input
+    const keys = {};
+    let isRunning = false;
+
+    // Parametri movimento
+    const WALK_SPEED = 3;   // unità al secondo
+    const RUN_SPEED  = 7;
+
+    init();
+    animate();
+
+    function init() {
+      // SCENA
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x202025);
+
+      // CAMERA
+      camera = new THREE.PerspectiveCamera(
+        60,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        500
+      );
+      camera.position.set(0, 5, 10);
+
+      // RENDERER
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      document.body.appendChild(renderer.domElement);
+
+      // LUCI
+      const hemiLight = new THREE.HemisphereLight(0xffffff, 0x444444, 0.7);
+      hemiLight.position.set(0, 50, 0);
+      scene.add(hemiLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 1.0);
+      dirLight.position.set(10, 20, 10);
+      dirLight.castShadow = true;
+      dirLight.shadow.camera.near = 0.1;
+      dirLight.shadow.camera.far = 100;
+      dirLight.shadow.mapSize.set(2048, 2048);
+      scene.add(dirLight);
+
+      // PIANO
+      const planeGeo = new THREE.PlaneGeometry(200, 200);
+      const planeMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
+      const plane = new THREE.Mesh(planeGeo, planeMat);
+      plane.rotation.x = -Math.PI / 2;
+      plane.receiveShadow = true;
+      scene.add(plane);
+
+      // CONTROLLI CAMERA
+      controls = new OrbitControls(camera, renderer.domElement);
+      controls.target.set(0, 1, 0);
+      controls.enableDamping = true;
+
+      // CARICA PERSONAGGIO GLB
+      const loader = new GLTFLoader();
+      loader.load(
+        'models/character.glb', // <--- CAMBIA PERCORSO/NOME SE SERVE
+        (gltf) => {
+          character = gltf.scene;
+          character.traverse((obj) => {
+            if (obj.isMesh) {
+              obj.castShadow = true;
+              obj.receiveShadow = true;
+            }
+          });
+
+          // Scala / posizione iniziale
+          character.position.set(0, 0, 0);
+          character.scale.set(1, 1, 1); // adatta se il modello è enorme / minuscolo
+          scene.add(character);
+
+          // ANIMAZIONI
+          mixer = new THREE.AnimationMixer(character);
+
+          const clips = gltf.animations;
+          console.log('Animazioni trovate nel GLB:', clips.map(c => c.name));
+
+          function addAction(label, clipName) {
+            const clip = THREE.AnimationClip.findByName(clips, clipName);
+            if (clip) {
+              actions[label] = mixer.clipAction(clip);
+            } else {
+              console.warn(`Clip "${clipName}" non trovata nel GLB.`);
+            }
+          }
+
+          addAction('idle', ANIMATION_NAMES.idle);
+          addAction('walk', ANIMATION_NAMES.walk);
+          addAction('run',  ANIMATION_NAMES.run);
+
+          // Azione di default: idle
+          if (actions.idle) {
+            currentAction = actions.idle;
+            currentAction.play();
+          } else {
+            console.warn('Nessuna animazione idle trovata, uso la prima disponibile.');
+            if (clips[0]) {
+              currentAction = mixer.clipAction(clips[0]);
+              currentAction.play();
+            }
+          }
+
+          // Sposta target camera sul personaggio
+          controls.target.copy(character.position);
+          controls.update();
+        },
+        (xhr) => {
+          console.log(`Caricamento GLB: ${ (xhr.loaded / xhr.total * 100).toFixed(0) }%`);
+        },
+        (error) => {
+          console.error('Errore caricamento GLB:', error);
+        }
+      );
+
+      // EVENTI INPUT
+      window.addEventListener('keydown', onKeyDown);
+      window.addEventListener('keyup', onKeyUp);
+      window.addEventListener('resize', onWindowResize);
+    }
+
+    function onKeyDown(event) {
+      keys[event.code] = true;
+      if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+        isRunning = true;
+      }
+    }
+
+    function onKeyUp(event) {
+      keys[event.code] = false;
+      if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+        isRunning = false;
+      }
+    }
+
+    function onWindowResize() {
+      camera.aspect = window.innerWidth / window.innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function switchAction(name) {
+      const newAction = actions[name];
+      if (!newAction || newAction === currentAction) return;
+
+      newAction.reset().play();
+      if (currentAction) {
+        currentAction.crossFadeTo(newAction, 0.2, false);
+      }
+      currentAction = newAction;
+    }
+
+    function updateCharacter(delta) {
+      if (!character) return;
+
+      // Direzione di movimento in XZ
+      const moveDir = new THREE.Vector3();
+      if (keys['KeyW']) moveDir.z -= 1;
+      if (keys['KeyS']) moveDir.z += 1;
+      if (keys['KeyA']) moveDir.x -= 1;
+      if (keys['KeyD']) moveDir.x += 1;
+
+      let isMoving = moveDir.lengthSq() > 0;
+
+      if (isMoving) {
+        moveDir.normalize();
+
+        const speed = isRunning ? RUN_SPEED : WALK_SPEED;
+
+        // Rotazione del personaggio verso la direzione di movimento
+        const angle = Math.atan2(moveDir.x, moveDir.z);
+        character.rotation.y = angle;
+
+        // Aggiorna posizione
+        character.position.x += moveDir.x * speed * delta;
+        character.position.z += moveDir.z * speed * delta;
+
+        // Aggiorna animazione
+        if (isRunning && actions.run) {
+          switchAction('run');
+        } else if (actions.walk) {
+          switchAction('walk');
+        }
+      } else {
+        // Nessun input di movimento: idle
+        if (actions.idle) {
+          switchAction('idle');
+        }
+      }
+
+      // Camera "follow" morbida
+      const offset = new THREE.Vector3(0, 4, 8); // distanza camera dal personaggio
+      const desiredPos = character.position.clone().add(offset);
+      camera.position.lerp(desiredPos, 0.1);
+
+      controls.target.lerp(
+        character.position.clone().add(new THREE.Vector3(0, 1.5, 0)),
+        0.1
+      );
+      controls.update();
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+
+      const delta = clock.getDelta();
+
+      if (mixer) {
+        mixer.update(delta);
+      }
+
+      updateCharacter(delta);
+
+      renderer.render(scene, camera);
+    }
+  </script>
+</body>
+</html>
