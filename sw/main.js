@@ -1,5 +1,5 @@
 // main.js
-import { createRenderer, createScene, createCamera } from './scene.js';
+import { createRenderer, createScene, createCamera, THREE } from './scene.js';
 import { setupXROrFlat } from './xr.js';
 import { setupGame } from './game.js';
 
@@ -8,6 +8,9 @@ document.body.appendChild(renderer.domElement);
 
 const scene = createScene();
 const camera = createCamera();
+
+const listener = new THREE.AudioListener();
+camera.add(listener);
 
 // Scene resize
 window.addEventListener('resize', () => {
@@ -20,7 +23,7 @@ window.addEventListener('resize', () => {
 const xrState = setupXROrFlat(renderer, camera);
 
 // Logica di gioco (drone, colpi, spada)
-const game = setupGame(scene, camera, renderer, xrState.isXR);
+const game = setupGame(scene, camera, renderer, xrState.isXR, listener);
 
 // Loop di animazione – funziona sia con XR che senza
 let lastTime = 0;

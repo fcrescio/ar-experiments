@@ -4,9 +4,9 @@ import { Saber } from './saber.js';
 import { Drone } from './drone.js';
 import { ScorePanel3D } from './hud3d.js';
 
-export function setupGame(scene, camera, renderer, isXR) {
+export function setupGame(scene, camera, renderer, isXR, audioListener) {
   // crea spada
-  const saber = new Saber(scene, camera, renderer, isXR, 'right');
+  const saber = new Saber(scene, camera, renderer, isXR, 'right', audioListener);
 
   // crea drone
   const drone = new Drone(scene, camera);
@@ -28,6 +28,7 @@ export function setupGame(scene, camera, renderer, isXR) {
   // HUD debug vecchio puoi anche toglierlo, o tenerlo qui se ti serve ancora
 
   function update(dt) {
+    saber.update(dt);
     drone.update(dt, saber);
     // nient’altro, tutto il resto è dentro i moduli
   }
