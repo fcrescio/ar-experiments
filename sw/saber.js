@@ -1,6 +1,7 @@
 // saber.js
 import { THREE } from './scene.js';
 import { DEBUG } from './config.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 export const SABER_LENGTH = 1.0;
 export const SABER_EFFECTIVE_RADIUS = SABER_LENGTH * 0.5;
@@ -13,7 +14,7 @@ export class Saber {
     this.isXR = isXR;
     this.audioListener = audioListener;
 
-    this.bladeThickness = 0.03;
+    this.bladeThickness = 0.01;
 
     // --- crea geometria lama + impugnatura ---
     const bladeGeo = new THREE.CylinderGeometry(
@@ -29,9 +30,36 @@ export class Saber {
     });
     this.blade = new THREE.Mesh(bladeGeo, bladeMat);
 
-    const hiltGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.2, 12);
-    const hiltMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
-    this.hilt = new THREE.Mesh(hiltGeo, hiltMat);
+    this.hilt = new THREE.Group();   // placeholder
+    this.hiltModelRoot = null;
+    this.hiltReady = false;              // diventa true quando il glb è caricato
+    // --- CARICAMENTO MODELLO GLB ---
+    const loader = new GLTFLoader();
+    loader.load(
+      'assets/lightsaber_holder.glb',    // path relativo a index.html
+      (gltf) => {
+        this.hiltModelRoot = gltf.scene;
+
+        // opzionale: scala e orientamento del modello
+        this.hiltModelRoot.scale.set(0.2, 0.2, 0.2);    // riduci/ingrandisci
+        // se “guarda” nella direzione sbagliata, ruotalo:
+        this.hiltModelRoot.rotation.x = Math.PI/2; // ad es. 180°
+
+        this.hilt.add(this.hiltModelRoot);
+
+        this.ready = true;
+        if (DEBUG) console.log('Lightsaber GLB caricato');
+      },
+      undefined,
+      (err) => {
+        console.error('Errore nel caricamento del lightsaber GLB:', err);
+      }
+    );
+
+
+    //const hiltGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.2, 12);
+    //const hiltMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
+    //this.hilt = new THREE.Mesh(hiltGeo, hiltMat);
 
     this.holder = new THREE.Group();
     this.holder.add(this.hilt);

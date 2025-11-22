@@ -3,20 +3,70 @@ import { THREE } from './scene.js';
 import { DEBUG } from './config.js';
 import { SABER_EFFECTIVE_RADIUS } from './saber.js';
 
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
 export class Drone {
   constructor(scene, camera) {
     this.scene = scene;
     this.camera = camera;
 
     // --- mesh del drone ---
-    const geo = new THREE.SphereGeometry(0.15, 24, 24);
-    const mat = new THREE.MeshPhongMaterial({
-      color: 0x00ffcc,
-      emissive: 0x008877,
-      shininess: 80,
-    });
-    this.mesh = new THREE.Mesh(geo, mat);
+    this.mesh = new THREE.Group();   // placeholder
+    this.modelRoot = null;
+    this.mixer = null;
+    this.ready = false;              // diventa true quando il glb è caricato
+
     scene.add(this.mesh);
+
+    // 👉 stato per la rotazione “random”
+    this.spinAngleY = 0;        // rotazione attuale attorno a Y
+    this.spinSpeedY = 0;        // velocità attuale (rad/s)
+    this.wobbleX = 0;           // piccola inclinazione su X
+    this.wobbleZ = 0;           // piccola inclinazione su Z
+    this.spinTimer = 0;
+    this.spinInterval = 0;
+
+    // helper per generare il prossimo stato di spin
+    this._pickNewSpin();
+
+    // --- CARICAMENTO MODELLO GLB ---
+    const loader = new GLTFLoader();
+    loader.load(
+      'assets/training_droid.glb',    // path relativo a index.html
+      (gltf) => {
+        this.modelRoot = gltf.scene;
+
+        // opzionale: scala e orientamento del modello
+        this.modelRoot.scale.set(0.2, 0.2, 0.2);    // riduci/ingrandisci
+        // se “guarda” nella direzione sbagliata, ruotalo:
+        // this.modelRoot.rotation.y = Math.PI; // ad es. 180°
+
+        this.mesh.add(this.modelRoot);
+
+        // --- ANIMAZIONI ---
+        if (gltf.animations && gltf.animations.length > 0) {
+          this.mixer = new THREE.AnimationMixer(this.modelRoot);
+
+          // opzione 1: fai partire TUTTE le animazioni in loop
+          gltf.animations.forEach((clip) => {
+            const action = this.mixer.clipAction(clip);
+            action.play();
+          });
+
+          // opzione 2: se vuoi solo una clip specifica:
+          // const idleClip = gltf.animations[0];
+          // this.mixer.clipAction(idleClip).play();
+        }
+
+        this.ready = true;
+        if (DEBUG) console.log('Drone GLB caricato');
+      },
+      undefined,
+      (err) => {
+        console.error('Errore nel caricamento del drone GLB:', err);
+      }
+    );
+
 
     // stato movimento
     this.state = 'idle';
@@ -42,8 +92,29 @@ export class Drone {
     // colpi
     this.bolts = [];
     this.boltSpeed = 4.0;
-    this.boltGeo = new THREE.SphereGeometry(0.03, 8, 8);
-    this.boltMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+	// lunghezza e raggio del "lampo"
+	this.boltLength = 0.35;
+	const boltRadius = 0.003;
+
+	// cilindro lungo l’asse Z (lo ruotiamo dopo lungo la direzione di sparo)
+	this.boltGeo = new THREE.CylinderGeometry(
+	  boltRadius,
+	  boltRadius,
+	  this.boltLength,
+	  6
+	);
+
+	// materiale "laser"
+	this.boltMat = new THREE.MeshStandardMaterial({
+	  color: 0xff5533,
+	  emissive: 0xff5533,
+	  emissiveIntensity: 3.0,
+	  metalness: 0.0,
+	  roughness: 0.2,
+	  transparent: true,
+	  opacity: 0.9,
+	});
+
     this.reflectedColor = 0x00ff44;
     this.shootTimer = 0;
     this.shootInterval = 1.6;
@@ -67,6 +138,23 @@ export class Drone {
     const r = radius * Math.sqrt(Math.random());
     return new THREE.Vector2(Math.cos(angle) * r, Math.sin(angle) * r);
   }
+
+  _pickNewSpin() {
+    // durata di questo “stato” di rotazione
+    this.spinInterval = 0.7 + Math.random() * 1.3; // tra 0.7 e 2.0 secondi
+    this.spinTimer = 0;
+
+    // velocità di rotazione attorno a Y (rad/s)
+    const minSpin = -2.5;
+    const maxSpin =  2.5;
+    this.spinSpeedY = THREE.MathUtils.randFloat(minSpin, maxSpin);
+
+    // piccola inclinazione random su X/Z (wobble)
+    const maxTilt = THREE.MathUtils.degToRad(12); // 12°
+    this.wobbleX = THREE.MathUtils.randFloatSpread(maxTilt);
+    this.wobbleZ = THREE.MathUtils.randFloatSpread(maxTilt);
+  }
+
 
   _pickNewState() {
     if (this.state === 'idle') {
@@ -158,10 +246,9 @@ export class Drone {
   _spawnBolt() {
     const bolt = new THREE.Mesh(this.boltGeo, this.boltMat.clone());
     this.mesh.getWorldPosition(this._tmpDronePos);
-    bolt.position.copy(this._tmpDronePos);
 
+    // mira alla testa del giocatore
     this.camera.getWorldPosition(this._tmpCameraPos);
-
     const target = this._tmpCameraPos.clone().add(
       new THREE.Vector3(
         (Math.random() - 0.5) * 0.3,
@@ -170,12 +257,26 @@ export class Drone {
       )
     );
 
+    // direzione normalizzata
     const dir = target.clone().sub(this._tmpDronePos).normalize();
+
+    // centro del lampo: leggermente davanti al drone
+    const halfLen = this.boltLength * 0.5;
+    const startPos = this._tmpDronePos.clone().add(dir.clone().multiplyScalar(halfLen));
+    bolt.position.copy(startPos);
+
+    // orienta il cilindro lungo la direzione del colpo
+    const yAxis = new THREE.Vector3(0, 1, 0);
+    const quat = new THREE.Quaternion().setFromUnitVectors(yAxis, dir);
+    bolt.quaternion.copy(quat);
+
+    // velocità
     const velocity = dir.multiplyScalar(this.boltSpeed);
 
     this.scene.add(bolt);
     this.bolts.push({ mesh: bolt, velocity, reflected: false });
   }
+
 
   _updateBolts(dt, saber) {
     this.camera.getWorldPosition(this._tmpCameraPos);
@@ -223,7 +324,32 @@ export class Drone {
   }
 
   update(dt, saber) {
+    // 1) aggiorna animazione del modello, se c’è
+    if (this.mixer && dt > 0) {
+      this.mixer.update(dt);
+    }
+
+    // 2) se il modello non è ancora pronto, puoi comunque aggiornare il movimento base,
+    //    ma se vuoi puoi anche early-return dopo aver mosso il "centro"
     this._updateMovement(dt);
+    // --- rotazione random del modello GLB ---
+    if (this.modelRoot && dt > 0) {
+      // aggiorna timer e, se scaduto, scegli un nuovo stato di spin
+      this.spinTimer += dt;
+      if (this.spinTimer > this.spinInterval) {
+        this._pickNewSpin();
+      }
+
+      // integra rotazione attorno a Y
+      this.spinAngleY += this.spinSpeedY * dt;
+
+      // applica rotazione + wobble al modello (NON al group esterno!)
+      this.modelRoot.rotation.set(this.wobbleX, this.spinAngleY, this.wobbleZ);
+    }
+
+
+    // 3) aggiornare colpi/collisioni solo se è pronto (per evitare glitch all’inizio)
+    if (!this.ready) return;
 
     this.shootTimer += dt;
     if (this.shootTimer > this.shootInterval) {
@@ -233,4 +359,5 @@ export class Drone {
 
     this._updateBolts(dt, saber);
   }
+
 }

@@ -36,10 +36,10 @@ export function createScene() {
   }
 
   // Luci
-  const hemi = new THREE.HemisphereLight(0xffffff, 0x080820, 0.7);
+  const hemi = new THREE.HemisphereLight(0xffffff, 0x080820, 1.5);
   scene.add(hemi);
 
-  const dir = new THREE.DirectionalLight(0xffffff, 0.8);
+  const dir = new THREE.DirectionalLight(0xffffff, 2);
   dir.position.set(5, 10, 7);
   scene.add(dir);
 
