@@ -17,9 +17,21 @@ export function setupGame(scene, camera, renderer, isXR) {
   droneGroup.add(drone);
   scene.add(droneGroup);
 
-  let droneAngle = 0;
-  const droneOrbitRadius = 1.8;
-  const droneAngularSpeed = 0.7;
+  // nuovo sistema di movimento “fluttuante + scatti”
+  let droneState = 'idle'; // 'idle' | 'dash'
+  let droneStateTimer = 0;
+  let droneStateDuration = 2.0;
+
+  const idleLerpSpeed = 1.5; // quanto “morbido” fluttua verso il target
+  const dashLerpSpeed = 8.0; // quanto rapido negli scatti
+
+  const baseDistance = 1.6;  // distanza dalla testa
+  const idleRadius = 0.25;   // raggio di movimento in idle
+  const dashRadius = 0.45;   // raggio di movimento per gli scatti
+
+  // offset 2D (destra/su) rispetto al centro davanti alla faccia
+  const currentOffset = new THREE.Vector2(0, 0);
+  let targetOffset = new THREE.Vector2(0, 0);
 
   // --- COLPI ---
   const bolts = [];
@@ -59,26 +71,17 @@ export function setupGame(scene, camera, renderer, isXR) {
   saberHolder.add(hilt);
   saberHolder.add(blade);
 
-  // POSIZIONAMENTO RELATIVO DI LAMA E IMPUGNATURA
-  // - hilt centrato nell'origine del controller (mano)
-  //   -> estende ±0.1 lungo Y
-  hilt.position.set(0, 0, 0);
-
-  // - blade: base subito sopra l'impugnatura
-  //   hilt metà altezza = 0.1
-  //   blade metà altezza = 0.5
-  //   centro lama = 0.1 + 0.5 = 0.6
-  blade.position.set(0, 0.6, 0);
-  // NIENTE rotazioni strane: la lama rimane verticale
+  // posizionamento relativo
+  hilt.position.set(0, 0, 0); // mano al centro dell'impugnatura
+  blade.position.set(0, 0.6, 0); // base lama appena sopra l’impugnatura
 
   // Aggancio al controller o alla camera, a seconda di XR/flat
   let controller = null;
   if (isXR) {
-    controller = renderer.xr.getController(0);
+    controller = renderer.xr.getController(1); // 1 = mano destra
     scene.add(controller);
     controller.add(saberHolder);
   } else {
-    // in flat mode: la spada "in mano" davanti alla camera
     camera.add(saberHolder);
     scene.add(camera);
     saberHolder.position.set(0.25, -0.25, -0.5);
@@ -91,6 +94,10 @@ export function setupGame(scene, camera, renderer, isXR) {
   const tmpDroneWorldPos = new THREE.Vector3();
   const tmpBoltDir = new THREE.Vector3();
   const tmpSaberQuat = new THREE.Quaternion();
+
+  const tmpCameraDir = new THREE.Vector3();
+  const tmpRight = new THREE.Vector3();
+  const tmpUp = new THREE.Vector3(0, 1, 0);
 
   // --- HUD DI DEBUG ---
   let debugPanel = null;
@@ -115,11 +122,11 @@ export function setupGame(scene, camera, renderer, isXR) {
 
     camera.getWorldPosition(tmpCameraWorldPos);
     drone.getWorldPosition(tmpDroneWorldPos);
-    // per il debug usiamo il centro della lama
     blade.getWorldPosition(tmpSaberWorldPos);
 
     const lines = [
       `dt: ${dt.toFixed(3)} s`,
+      `state: ${droneState}`,
       `bolts: ${bolts.length}`,
       `cam:   (${tmpCameraWorldPos.x.toFixed(2)}, ${tmpCameraWorldPos.y.toFixed(
         2
@@ -133,6 +140,81 @@ export function setupGame(scene, camera, renderer, isXR) {
     ];
     debugPanel.textContent = lines.join('\n');
   }
+
+  // --- DRONE MOVEMENT HELPER ---
+
+  function randomOffset(radius) {
+    // offset casuale ma limitato, sempre davanti (x=destra, y=su)
+    const angle = Math.random() * Math.PI * 2;
+    const r = radius * Math.sqrt(Math.random());
+    return new THREE.Vector2(Math.cos(angle) * r, Math.sin(angle) * r);
+  }
+
+  function pickNewDroneState() {
+    if (droneState === 'idle') {
+      // con una buona probabilità entra in dash
+      if (Math.random() < 0.7) {
+        droneState = 'dash';
+        droneStateDuration = 0.25 + Math.random() * 0.15; // scatto breve
+        targetOffset = randomOffset(dashRadius);
+      } else {
+        // idle → idle con altro target soft
+        droneState = 'idle';
+        droneStateDuration = 1.0 + Math.random() * 1.0;
+        targetOffset = randomOffset(idleRadius);
+      }
+    } else {
+      // dash → torna a idle più soft
+      droneState = 'idle';
+      droneStateDuration = 1.0 + Math.random() * 1.0;
+      targetOffset = randomOffset(idleRadius);
+    }
+    droneStateTimer = 0;
+  }
+
+  // inizializza offset iniziale
+  pickNewDroneState();
+
+  function updateDrone(dt) {
+    camera.getWorldPosition(tmpCameraWorldPos);
+
+    // direzione di vista della camera
+    camera.getWorldDirection(tmpCameraDir); // verso dove guardo
+    tmpCameraDir.normalize();
+
+    // base point = davanti alla faccia
+    const basePos = tmpCameraWorldPos
+      .clone()
+      .add(tmpCameraDir.clone().multiplyScalar(baseDistance));
+
+    // frame locale: right = forward x up
+    tmpRight.copy(tmpCameraDir).cross(tmpUp).normalize();
+    // se la camera guarda molto su/giù, right potrebbe diventare bizzarro,
+    // ma per il training funziona comunque.
+
+    // aggiornamento stato
+    droneStateTimer += dt;
+    if (droneStateTimer > droneStateDuration) {
+      pickNewDroneState();
+    }
+
+    // interpola l'offset verso il target
+    const lerpSpeed = droneState === 'idle' ? idleLerpSpeed : dashLerpSpeed;
+    const lerpFactor = 1 - Math.exp(-lerpSpeed * dt); // lerp “soft”
+    currentOffset.lerp(targetOffset, lerpFactor);
+
+    // costruisci posizione finale: base + offset su destra/su
+    const offsetWorld = new THREE.Vector3()
+      .addScaledVector(tmpRight, currentOffset.x)
+      .addScaledVector(tmpUp, currentOffset.y);
+
+    const finalPos = basePos.clone().add(offsetWorld);
+
+    drone.position.copy(finalPos);
+    drone.lookAt(tmpCameraWorldPos);
+  }
+
+  // --- COLPI ---
 
   function spawnBolt() {
     const bolt = new THREE.Mesh(boltGeo, boltMat.clone());
@@ -158,7 +240,6 @@ export function setupGame(scene, camera, renderer, isXR) {
 
   function updateBolts(dt) {
     camera.getWorldPosition(tmpCameraWorldPos);
-    // centro lama come riferimento
     blade.getWorldPosition(tmpSaberWorldPos);
 
     // direzione della spada: asse Y locale della lama
@@ -188,7 +269,7 @@ export function setupGame(scene, camera, renderer, isXR) {
         continue;
       }
 
-      // collisione con la lama (sfera attorno al centro lama)
+      // collisione con la lama
       const d = bolt.mesh.position.distanceTo(tmpSaberWorldPos);
       if (d < SABER_EFFECTIVE_RADIUS && !bolt.reflected) {
         tmpBoltDir.copy(bolt.velocity).normalize();
@@ -207,20 +288,7 @@ export function setupGame(scene, camera, renderer, isXR) {
 
   // --- FUNZIONE UPDATE CHIAMATA DAL MAIN ---
   function update(dt) {
-    // posizione della camera (testa) per tenere il drone alla giusta altezza
-    camera.getWorldPosition(tmpCameraWorldPos);
-
-    // orbita del drone attorno al giocatore alla stessa altezza della testa
-    droneAngle += droneAngularSpeed * dt;
-    const centerX = tmpCameraWorldPos.x;
-    const centerZ = tmpCameraWorldPos.z;
-    const headY = tmpCameraWorldPos.y; // altezza testa giocatore
-
-    const px = centerX + Math.cos(droneAngle) * droneOrbitRadius;
-    const pz = centerZ + Math.sin(droneAngle) * droneOrbitRadius;
-
-    drone.position.set(px, headY, pz);
-    drone.lookAt(centerX, headY, centerZ);
+    updateDrone(dt);
 
     // spara periodicamente
     shootTimer += dt;
