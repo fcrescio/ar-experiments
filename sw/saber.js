@@ -11,6 +11,7 @@ export class Saber {
     this.camera = camera;
     this.renderer = renderer;
     this.isXR = isXR;
+    this.audioListener = audioListener;
 
     this.bladeThickness = 0.03;
 
@@ -36,9 +37,12 @@ export class Saber {
     this.holder.add(this.hilt);
     this.holder.add(this.blade);
 
-    // --- AUDIO DELLA SPADA (SINTETIZZATO) ---
+    // --- AUDIO DELLA SPADA (SINTETIZZATO, MULTI-OSC + FILTRO) ---
     this.audio = null;
-    this.oscillator = null;
+    this.oscMain1 = null;
+    this.oscMain2 = null;
+    this.oscSub = null;
+    this.filter = null;
     this.gainNode = null;
     this.audioContext = null;
     this.smoothedSpeed = 0;
@@ -49,19 +53,38 @@ export class Saber {
       const audio = new THREE.PositionalAudio(this.audioListener);
       const context = this.audioListener.context;
 
-      // Oscillatore "grezzo" tipo hum di spada
-      const osc = context.createOscillator();
+      this.audioContext = context;
+
+      // Oscillatori principali (due saw detunati)
+      const osc1 = context.createOscillator();
+      const osc2 = context.createOscillator();
+      const sub = context.createOscillator();
+
+      osc1.type = 'sawtooth';
+      osc2.type = 'sawtooth';
+      sub.type = 'sine';
+
+      // Frequenze base (regolate in update(), ma mettiamo dei default)
+      osc1.frequency.value = 110;       // A2 circa
+      osc2.frequency.value = 110 * 1.02; // leggermente detunato
+      sub.frequency.value = 55;         // un'ottava sotto
+
+      // Filtro low-pass per togliere digitale cattivo
+      const filter = context.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.value = 800;     // Hz iniziale
+      filter.Q.value = 1.0;            // risonanza moderata
+
+      // Mix osc -> filter
+      osc1.connect(filter);
+      osc2.connect(filter);
+      sub.connect(filter);
+
+      // Gain globale (volume della spada)
       const gain = context.createGain();
+      gain.gain.value = 0.2; // base, verrà modulato
 
-      // Timbro base: prova triangle o sawtooth
-      osc.type = 'sawtooth';        // 'triangle' se lo vuoi più morbido
-      osc.frequency.value = 90;     // Hz base, regoliamo in update()
-
-      // Volume iniziale molto basso, per non spaccare le orecchie
-      gain.gain.value = 0.2;
-
-      // Catena: osc -> gain -> PositionalAudio
-      osc.connect(gain);
+      filter.connect(gain);
       audio.setNodeSource(gain);
 
       audio.setRefDistance(1.5);
@@ -69,17 +92,22 @@ export class Saber {
 
       this.holder.add(audio);
 
-      // Avvia il sintetizzatore
-      osc.start();
+      // Avvia gli oscillatori
+      osc1.start();
+      osc2.start();
+      sub.start();
 
       this.audio = audio;
-      this.oscillator = osc;
+      this.oscMain1 = osc1;
+      this.oscMain2 = osc2;
+      this.oscSub = sub;
+      this.filter = filter;
       this.gainNode = gain;
-      this.audioContext = context;
 
       // posizione iniziale per il calcolo velocità
       this.getBladeWorldPosition(this._prevPosForAudio);
     }
+
 
     // posizionamento relativo
     this.hilt.position.set(0, 0, 0);
@@ -130,9 +158,14 @@ export class Saber {
     target.applyQuaternion(this._tmpQuat).normalize();
     return target;
   }
-
   update(dt) {
-    if (!this.audio || dt <= 0) return;
+    // Assicurati che tutto l’audio sia inizializzato
+    if (!this.audio || !this.oscillator || !this.gainNode || !this.audioContext || dt <= 0) return;
+
+    // Se l’AudioContext è sospeso, prova a resumerlo (dopo l’interazione XR dovrebbe andare)
+    if (this.audioContext.state === 'suspended') {
+      this.audioContext.resume();
+    }
 
     // calcola velocità della lama
     this.getBladeWorldPosition(this._curPosForAudio);
@@ -150,25 +183,25 @@ export class Saber {
       this.smoothedSpeed +
       (speed - this.smoothedSpeed) * smoothing;
 
-    // mappa la velocità a volume + pitch
+    // mappa la velocità a volume + frequenza
     const minSpeed = 0.0;
     const maxSpeed = 4.0; // oltre questo consideriamo “veloce”
     const tRaw = (this.smoothedSpeed - minSpeed) / (maxSpeed - minSpeed);
     const t = THREE.MathUtils.clamp(tRaw, 0, 1);
 
-    const baseVolume = 0.25;
-    const maxVolume = 0.9;
-    const volume = baseVolume + (maxVolume - baseVolume) * t;
+    const baseGain = 0.15;
+    const maxGain = 0.7;
+    const gainValue = baseGain + (maxGain - baseGain) * t;
 
-    const basePitch = 0.9;
-    const maxPitch = 1.6;
-    const playbackRate = basePitch + (maxPitch - basePitch) * t;
+    const baseFreq = 90;    // Hz base
+    const maxFreq = 220;    // Hz max
+    const freqValue = baseFreq + (maxFreq - baseFreq) * t;
 
-    if (this.audio.isPlaying) {
-      this.audio.setVolume(volume);
-      this.audio.setPlaybackRate(playbackRate);
-    }
+    const now = this.audioContext.currentTime;
+    this.gainNode.gain.setTargetAtTime(gainValue, now, 0.03);
+    this.oscillator.frequency.setTargetAtTime(freqValue, now, 0.03);
 
     this._prevPosForAudio.copy(this._curPosForAudio);
   }
+
 }
