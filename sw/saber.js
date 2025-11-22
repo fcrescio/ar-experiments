@@ -159,15 +159,25 @@ export class Saber {
     return target;
   }
   update(dt) {
-    // Assicurati che tutto l’audio sia inizializzato
-    if (!this.audio || !this.oscillator || !this.gainNode || !this.audioContext || dt <= 0) return;
+    if (
+      !this.audio ||
+      !this.audioContext ||
+      !this.gainNode ||
+      !this.filter ||
+      !this.oscMain1 ||
+      !this.oscMain2 ||
+      !this.oscSub ||
+      dt <= 0
+    ) {
+      return;
+    }
 
-    // Se l’AudioContext è sospeso, prova a resumerlo (dopo l’interazione XR dovrebbe andare)
+    // In alcuni ambienti l'AudioContext parte "suspended"
     if (this.audioContext.state === 'suspended') {
       this.audioContext.resume();
     }
 
-    // calcola velocità della lama
+    // Calcola velocità della lama
     this.getBladeWorldPosition(this._curPosForAudio);
 
     const vel = this._curPosForAudio
@@ -175,32 +185,58 @@ export class Saber {
       .sub(this._prevPosForAudio)
       .divideScalar(dt);
 
-    const speed = vel.length(); // m/s circa, in unità della scena
+    const speed = vel.length();
 
-    // smoothing (per evitare "tremolio" di volume/pitch)
-    const smoothing = 1 - Math.exp(-6 * dt); // costante ~6 = reattivo ma non isterico
+    // Smoothing
+    const smoothing = 1 - Math.exp(-6 * dt);
     this.smoothedSpeed =
       this.smoothedSpeed +
       (speed - this.smoothedSpeed) * smoothing;
 
-    // mappa la velocità a volume + frequenza
+    // Normalizza velocità in [0,1]
     const minSpeed = 0.0;
-    const maxSpeed = 4.0; // oltre questo consideriamo “veloce”
+    const maxSpeed = 4.0;
     const tRaw = (this.smoothedSpeed - minSpeed) / (maxSpeed - minSpeed);
     const t = THREE.MathUtils.clamp(tRaw, 0, 1);
 
-    const baseGain = 0.15;
-    const maxGain = 0.7;
-    const gainValue = baseGain + (maxGain - baseGain) * t;
-
-    const baseFreq = 90;    // Hz base
-    const maxFreq = 220;    // Hz max
-    const freqValue = baseFreq + (maxFreq - baseFreq) * t;
-
     const now = this.audioContext.currentTime;
-    this.gainNode.gain.setTargetAtTime(gainValue, now, 0.03);
-    this.oscillator.frequency.setTargetAtTime(freqValue, now, 0.03);
 
+    // Volume globale (gain)
+    const baseGain = 0.15;
+    const maxGain = 0.6;
+    const gainValue = baseGain + (maxGain - baseGain) * t;
+    this.gainNode.gain.setTargetAtTime(gainValue, now, 0.03);
+
+    // Cutoff del filtro: più veloce = più brillante/aggressivo
+    const baseCutoff = 500;   // Hz con spada ferma
+    const maxCutoff = 2500;   // Hz con swing forte
+    const cutoffValue = baseCutoff + (maxCutoff - baseCutoff) * t;
+    this.filter.frequency.setTargetAtTime(cutoffValue, now, 0.03);
+
+    // Un po' di movimento di pitch, ma senza esagerare (per non diventare caricatura)
+    const baseFreq = 110;   // "nota" di base
+    const maxFreq = 160;    // con swing
+    const mainFreq = baseFreq + (maxFreq - baseFreq) * t;
+
+    // Piccolissimo vibrato lento
+    const vibratoAmt = 2;   // Hz di escursione
+    const vibratoSpeed = 3; // Hz oscillazione vibrato
+    const vibrato =
+      Math.sin(now * vibratoSpeed * 2 * Math.PI) * vibratoAmt;
+
+    const finalFreq1 = mainFreq + vibrato;
+    const finalFreq2 = mainFreq * 1.02 + vibrato;
+
+    this.oscMain1.frequency.setTargetAtTime(finalFreq1, now, 0.05);
+    this.oscMain2.frequency.setTargetAtTime(finalFreq2, now, 0.05);
+
+    // Sub segue più lentamente, meno escursione
+    const subBase = baseFreq / 2;
+    const subMax = maxFreq / 2;
+    const subFreq = subBase + (subMax - subBase) * t * 0.6;
+    this.oscSub.frequency.setTargetAtTime(subFreq, now, 0.07);
+
+    // Aggiorna posizione precedente
     this._prevPosForAudio.copy(this._curPosForAudio);
   }
 
