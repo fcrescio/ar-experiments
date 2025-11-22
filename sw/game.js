@@ -74,12 +74,13 @@ export function setupGame(scene, camera, renderer, isXR) {
     saberHolder.position.set(0.3, -0.2, -0.5); // leggermente in basso a destra
   }
 
-  // --- VETTORI TEMPORANEI ---
+  // --- VETTORI / QUATERNION TEMPORANEI ---
   const tmpCameraWorldPos = new THREE.Vector3();
   const tmpSaberWorldPos = new THREE.Vector3();
   const tmpSaberDir = new THREE.Vector3();
   const tmpDroneWorldPos = new THREE.Vector3();
   const tmpBoltDir = new THREE.Vector3();
+  const tmpSaberQuat = new THREE.Quaternion();   // <-- AGGIUNTO
 
   // --- PICCOLO HUD DI DEBUG (facoltativo) ---
   let debugPanel = null;
@@ -148,7 +149,10 @@ export function setupGame(scene, camera, renderer, isXR) {
 
     // direzione della spada (asse Y locale del cilindro)
     tmpSaberDir.set(0, 1, 0);
-    tmpSaberDir.applyQuaternion(saber.getWorldQuaternion());
+
+    // ✅ FIX: usa un quaternion temporaneo come target
+    saber.getWorldQuaternion(tmpSaberQuat);
+    tmpSaberDir.applyQuaternion(tmpSaberQuat);
     tmpSaberDir.normalize();
 
     for (let i = bolts.length - 1; i >= 0; i--) {

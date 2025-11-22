@@ -1,5 +1,5 @@
 // scene.js
-import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
+import * as THREE from 'three';
 import { USE_XR, USE_PASSTHROUGH } from './config.js';
 
 // Riesporto THREE così gli altri moduli possono importarlo da qui
