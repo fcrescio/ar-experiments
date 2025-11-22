@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <title>WebXR Drone Training</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+        color: #fff;
+        font-family: system-ui, sans-serif;
+      }
+      #hud {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        padding: 8px 10px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 6px;
+        font-size: 12px;
+        z-index: 10;
+      }
+      #hud strong {
+        color: #7cf9ff;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">
+      <strong>Drone Training</strong><br />
+      - Modalità XR: configurabile in <code>config.js</code><br />
+      - In modalità flat: usa il mouse per ruotare la camera<br />
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
