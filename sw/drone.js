@@ -1,6 +1,7 @@
 // drone.js
 import { THREE } from './scene.js';
 import { DEBUG } from './config.js';
+import { SABER_EFFECTIVE_RADIUS } from './saber.js';
 
 export class Drone {
   constructor(scene, camera) {
