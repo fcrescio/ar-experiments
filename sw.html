@@ -1,0 +1,269 @@
+[200~<!DOCTYPE html>
+<html lang="it">
+  <head>
+    <meta charset="UTF-8" />
+    <title>WebXR - Drone di allenamento</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+        background: #000;
+        color: #fff;
+        font-family: system-ui, sans-serif;
+      }
+      #info {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        padding: 10px 14px;
+        background: rgba(0, 0, 0, 0.5);
+        border-radius: 6px;
+        max-width: 260px;
+        z-index: 10;
+        font-size: 13px;
+      }
+      #info strong {
+        color: #7cf9ff;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      <strong>Drone di allenamento XR</strong><br />
+      • Metti il visore e premi il pulsante "Enter VR".<br />
+      • La sfera spara colpi di energia verso di te.<br />
+      • Usa la spada di energia (controller) per deviarli.
+    </div>
+
+    <!-- Il resto è codice JS come modulo -->
+    <script type="module">
+      import * as THREE from 'https://unpkg.com/three@0.161.0/build/three.module.js';
+      import { VRButton } from 'https://unpkg.com/three@0.161.0/examples/jsm/webxr/VRButton.js';
+
+      // --- SCENA BASE ---
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x000000);
+
+      const camera = new THREE.PerspectiveCamera(
+        70,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        100
+      );
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setPixelRatio(window.devicePixelRatio);
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.xr.enabled = true;
+      document.body.appendChild(renderer.domElement);
+      document.body.appendChild(VRButton.createButton(renderer));
+
+      // --- LUCI ---
+      const hemiLight = new THREE.HemisphereLight(0xffffff, 0x080820, 0.7);
+      scene.add(hemiLight);
+
+      const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+      dirLight.position.set(5, 10, 7);
+      scene.add(dirLight);
+
+      // --- PAVIMENTO ---
+      const floorGeo = new THREE.CircleGeometry(10, 32);
+      const floorMat = new THREE.MeshPhongMaterial({
+        color: 0x111111,
+        side: THREE.DoubleSide,
+      });
+      const floor = new THREE.Mesh(floorGeo, floorMat);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.y = 0;
+      scene.add(floor);
+
+      // --- "GLOW" SEMPLICE (NEBBIA) ---
+      scene.fog = new THREE.FogExp2(0x000000, 0.08);
+
+      // --- DRONE SFERICO ---
+      const droneRadius = 0.15;
+      const droneGeo = new THREE.SphereGeometry(droneRadius, 24, 24);
+      const droneMat = new THREE.MeshPhongMaterial({
+        color: 0x00ffcc,
+        emissive: 0x008877,
+        shininess: 80,
+      });
+      const drone = new THREE.Mesh(droneGeo, droneMat);
+      scene.add(drone);
+
+      const droneGroup = new THREE.Group();
+      droneGroup.add(drone);
+      scene.add(droneGroup);
+
+      let droneAngle = 0;
+      const droneOrbitRadius = 1.8;
+      const droneHeight = 1.6;
+      const droneAngularSpeed = 0.7; // rad/s
+
+      // --- COLPI DI ENERGIA ---
+      const bolts = [];
+      const boltSpeed = 4.0; // m/s
+      const boltGeo = new THREE.SphereGeometry(0.03, 8, 8);
+      const boltMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+
+      let shootTimer = 0;
+      const shootInterval = 1.6; // secondi fra un colpo e l'altro
+
+      // Struttura: { mesh, velocity: THREE.Vector3 }
+      function spawnBolt() {
+        const bolt = new THREE.Mesh(boltGeo, boltMat.clone());
+        const worldDronePos = new THREE.Vector3();
+        drone.getWorldPosition(worldDronePos);
+        bolt.position.copy(worldDronePos);
+
+        // Target leggermente random attorno alla testa del giocatore
+        const target = new THREE.Vector3(0, 1.6, 0).add(
+          new THREE.Vector3(
+            (Math.random() - 0.5) * 0.3,
+            (Math.random() - 0.5) * 0.3,
+            (Math.random() - 0.5) * 0.3
+          )
+        );
+        const dir = target.clone().sub(worldDronePos).normalize();
+        const velocity = dir.multiplyScalar(boltSpeed);
+
+        scene.add(bolt);
+        bolts.push({ mesh: bolt, velocity, reflected: false });
+      }
+
+      // --- CONTROLLER E SPADA DI ENERGIA ---
+      const controller = renderer.xr.getController(0);
+      scene.add(controller);
+
+      const saberLength = 1.0;
+      const saberThickness = 0.03;
+      const saberGeo = new THREE.CylinderGeometry(
+        saberThickness,
+        saberThickness,
+        saberLength,
+        8
+      );
+      const saberMat = new THREE.MeshBasicMaterial({
+        color: 0x66ccff,
+        emissive: 0x66ccff,
+        transparent: true,
+        opacity: 0.9,
+      });
+      const saber = new THREE.Mesh(saberGeo, saberMat);
+      saber.rotation.z = Math.PI / 2; // stesa in avanti
+      saber.position.y = 0.0;
+
+      const saberHolder = new THREE.Group();
+      saberHolder.add(saber);
+      controller.add(saberHolder);
+
+      // piccolo "impugnatura"
+      const hiltGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.2, 8);
+      const hiltMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
+      const hilt = new THREE.Mesh(hiltGeo, hiltMat);
+      hilt.position.y = -0.5;
+      saberHolder.add(hilt);
+
+      // Mat per colpo deflesso
+      const reflectedColor = 0x00ff44;
+
+      // --- GESTIONE COLLISIONI ---
+      const tmpWorldPos = new THREE.Vector3();
+      const tmpSaberDir = new THREE.Vector3();
+      const tmpBoltDir = new THREE.Vector3();
+
+      function updateBolts(dt) {
+        const cameraWorldPos = new THREE.Vector3();
+        camera.getWorldPosition(cameraWorldPos);
+
+        // pos centro spada
+        const saberWorldPos = new THREE.Vector3();
+        saber.getWorldPosition(saberWorldPos);
+
+        // direzione spada (asse Y cilindro, poi ruotato)
+        tmpSaberDir.set(0, 1, 0);
+        saber.getWorldQuaternion().multiplyVector3?.(tmpSaberDir); // (api vecchia – fallback sotto)
+        // per le versioni moderne:
+        tmpSaberDir.applyQuaternion(saber.getWorldQuaternion());
+        tmpSaberDir.normalize();
+
+        for (let i = bolts.length - 1; i >= 0; i--) {
+          const bolt = bolts[i];
+          bolt.mesh.position.addScaledVector(bolt.velocity, dt);
+
+          // se va troppo lontano, rimuovi
+          if (bolt.mesh.position.length() > 30) {
+            scene.remove(bolt.mesh);
+            bolts.splice(i, 1);
+            continue;
+          }
+
+          // se arriva troppo vicino al giocatore = "colpito"
+          if (bolt.mesh.position.distanceTo(cameraWorldPos) < 0.15 && !bolt.reflected) {
+            // qui potresti aggiungere un flash, rumore, ecc.
+            scene.remove(bolt.mesh);
+            bolts.splice(i, 1);
+            continue;
+          }
+
+          // controllo collisione con spada
+          const d = bolt.mesh.position.distanceTo(saberWorldPos);
+
+          // raggio efficace della spada (molto approssimato)
+          const effectiveRadius = saberLength * 0.5;
+          if (d < effectiveRadius && !bolt.reflected) {
+            // RIFLETTI
+            tmpBoltDir.copy(bolt.velocity).normalize();
+
+            // riflessione del vettore intorno all'asse della spada
+            // R = V - 2*(V·N)*N
+            const dot = tmpBoltDir.dot(tmpSaberDir);
+            const reflectDir = tmpBoltDir.clone().sub(tmpSaberDir.clone().multiplyScalar(2 * dot));
+            reflectDir.normalize();
+
+            bolt.velocity.copy(reflectDir.multiplyScalar(boltSpeed * 1.1)); // leggermente più veloce
+            bolt.reflected = true;
+            bolt.mesh.material.color.setHex(reflectedColor);
+          }
+        }
+      }
+
+      // --- LOOP XR ---
+      let prevTime = 0;
+
+      renderer.setAnimationLoop((time) => {
+        const t = time / 1000;
+        const dt = prevTime ? t - prevTime : 0;
+        prevTime = t;
+
+        // aggiorna orbita drone attorno al giocatore (0, altezza, 0)
+        droneAngle += droneAngularSpeed * dt;
+        const px = Math.cos(droneAngle) * droneOrbitRadius;
+        const pz = Math.sin(droneAngle) * droneOrbitRadius;
+        drone.position.set(px, droneHeight, pz);
+
+        // il gruppo guarda sempre il centro
+        drone.lookAt(0, droneHeight, 0);
+
+        // timer per sparare
+        shootTimer += dt;
+        if (shootTimer > shootInterval) {
+          shootTimer = 0;
+          spawnBolt();
+        }
+
+        updateBolts(dt);
+
+        renderer.render(scene, camera);
+      });
+
+      // --- RESPONSIVE ---
+      window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+    </script>
+  </body>
+</html>
