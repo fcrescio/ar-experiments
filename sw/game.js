@@ -21,6 +21,13 @@ export function setupGame(scene, camera, renderer, isXR) {
   let droneState = 'idle'; // 'idle' | 'dash'
   let droneStateTimer = 0;
   let droneStateDuration = 2.0;
+  // --- Stato "mondo" del drone ---
+  const droneCenter = new THREE.Vector3();      // centro dell'area in cui si muove
+  const droneForwardDir = new THREE.Vector3();  // direzione "davanti" rispetto al giocatore
+  let droneInitialized = false;                // per inizializzazione lazy
+
+  // parametri per il recenter rispetto allo sguardo
+  const RECENTER_ANGLE_DEG = 50;  // oltre questa angolazione il drone "torna in faccia"
 
   const idleLerpSpeed = 1.5; // quanto “morbido” fluttua verso il target
   const dashLerpSpeed = 8.0; // quanto rapido negli scatti
@@ -176,42 +183,84 @@ export function setupGame(scene, camera, renderer, isXR) {
   pickNewDroneState();
 
   function updateDrone(dt) {
+    // 1) Leggo posizione e direzione della camera
     camera.getWorldPosition(tmpCameraWorldPos);
-
-    // direzione di vista della camera
-    camera.getWorldDirection(tmpCameraDir); // verso dove guardo
+    camera.getWorldDirection(tmpCameraDir);
     tmpCameraDir.normalize();
 
-    // base point = davanti alla faccia
-    const basePos = tmpCameraWorldPos
-      .clone()
-      .add(tmpCameraDir.clone().multiplyScalar(baseDistance));
+    // 2) Inizializzazione una sola volta: metto il drone davanti alla faccia
+    if (!droneInitialized) {
+      droneCenter.copy(tmpCameraWorldPos);        // ancora iniziale = testa
+      droneForwardDir.copy(tmpCameraDir);         // direzione iniziale di sguardo
 
-    // frame locale: right = forward x up
-    tmpRight.copy(tmpCameraDir).cross(tmpUp).normalize();
-    // se la camera guarda molto su/giù, right potrebbe diventare bizzarro,
-    // ma per il training funziona comunque.
+      // posizione iniziale: davanti alla faccia
+      const initialPos = tmpCameraWorldPos
+        .clone()
+        .add(tmpCameraDir.clone().multiplyScalar(baseDistance));
 
-    // aggiornamento stato
+      drone.position.copy(initialPos);
+      droneInitialized = true;
+    }
+
+    // 3) Aggiorno stato (idle/dash) e offset nel suo frame locale
     droneStateTimer += dt;
     if (droneStateTimer > droneStateDuration) {
       pickNewDroneState();
     }
 
-    // interpola l'offset verso il target
     const lerpSpeed = droneState === 'idle' ? idleLerpSpeed : dashLerpSpeed;
-    const lerpFactor = 1 - Math.exp(-lerpSpeed * dt); // lerp “soft”
+    const lerpFactor = 1 - Math.exp(-lerpSpeed * dt);
     currentOffset.lerp(targetOffset, lerpFactor);
 
-    // costruisci posizione finale: base + offset su destra/su
-    const offsetWorld = new THREE.Vector3()
-      .addScaledVector(tmpRight, currentOffset.x)
-      .addScaledVector(tmpUp, currentOffset.y);
+    // 4) Calcolo il frame locale del drone (forward/right/up) SENZA usare la camera ogni frame
+    //    - forward = droneForwardDir (rimane relativamente costante)
+    //    - right = forward x up
+    const up = tmpUp; // (0,1,0) definito sopra
+    const forward = droneForwardDir.clone().normalize();
+    const right = tmpRight.copy(forward).cross(up).normalize();
 
-    const finalPos = basePos.clone().add(offsetWorld);
+    // 5) Costruisco la posizione target nel mondo:
+    //    centro = droneCenter
+    //    + forward * baseDistance
+    //    + right * currentOffset.x
+    //    + up * currentOffset.y
+    const targetWorldPos = new THREE.Vector3()
+      .copy(droneCenter)
+      .add(forward.clone().multiplyScalar(baseDistance))
+      .add(right.clone().multiplyScalar(currentOffset.x))
+      .add(up.clone().multiplyScalar(currentOffset.y));
 
-    drone.position.copy(finalPos);
+    drone.position.lerp(targetWorldPos, lerpFactor); // così il movimento è morbido
     drone.lookAt(tmpCameraWorldPos);
+
+    // 6) FACOLTATIVO: fai drift leggero del centro dietro al giocatore (solo traslazione)
+    //    così se ti sposti a piedi, il drone non rimane chilometri dietro
+    const centerLerp = 1 - Math.exp(-0.5 * dt); // drift lento
+    droneCenter.lerp(tmpCameraWorldPos, centerLerp);
+
+    // 7) Controllo "finestra" di sguardo: se lo sguardo è troppo lontano dal drone, recenter
+    const toDrone = new THREE.Vector3()
+      .copy(drone.position)
+      .sub(tmpCameraWorldPos)
+      .normalize();
+
+    const dot = tmpCameraDir.dot(toDrone);
+    const angleRad = Math.acos(THREE.MathUtils.clamp(dot, -1, 1));
+    const angleDeg = THREE.MathUtils.radToDeg(angleRad);
+
+    if (angleDeg > RECENTER_ANGLE_DEG) {
+      // Il drone è troppo fuori campo -> aggiorno ancora e direzione
+      droneCenter.copy(tmpCameraWorldPos);
+      droneForwardDir.copy(tmpCameraDir);
+
+      // movimento tipo "dash" verso il nuovo fronte
+      droneState = 'dash';
+      droneStateDuration = 0.25 + Math.random() * 0.2;
+      droneStateTimer = 0;
+
+      // nuovo target più “ampio” per rendere evidente il salto
+      targetOffset = randomOffset(dashRadius);
+    }
   }
 
   // --- COLPI ---
