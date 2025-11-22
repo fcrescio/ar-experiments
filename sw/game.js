@@ -19,7 +19,6 @@ export function setupGame(scene, camera, renderer, isXR) {
 
   let droneAngle = 0;
   const droneOrbitRadius = 1.8;
-  const droneHeight = 1.6;
   const droneAngularSpeed = 0.7;
 
   // --- COLPI ---
@@ -37,41 +36,52 @@ export function setupGame(scene, camera, renderer, isXR) {
   const saberThickness = 0.03;
   const SABER_EFFECTIVE_RADIUS = saberLength * 0.5;
 
-  const saberGeo = new THREE.CylinderGeometry(
+  // Lama: cilindro lungo l'asse Y (verticale)
+  const bladeGeo = new THREE.CylinderGeometry(
     saberThickness,
     saberThickness,
     saberLength,
-    8
+    12
   );
-  const saberMat = new THREE.MeshBasicMaterial({
+  const bladeMat = new THREE.MeshBasicMaterial({
     color: 0x66ccff,
     transparent: true,
     opacity: 0.9,
   });
-  const saber = new THREE.Mesh(saberGeo, saberMat);
-  saber.rotation.z = Math.PI / 2;
+  const blade = new THREE.Mesh(bladeGeo, bladeMat);
 
-  const saberHolder = new THREE.Group();
-  saberHolder.add(saber);
-
-  // impugnatura
-  const hiltGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.2, 8);
+  // Impugnatura: cilindro corto, centrato nella mano
+  const hiltGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.2, 12);
   const hiltMat = new THREE.MeshPhongMaterial({ color: 0x444444 });
   const hilt = new THREE.Mesh(hiltGeo, hiltMat);
-  hilt.position.y = -0.5;
-  saberHolder.add(hilt);
 
-  // Se siamo in XR: attacco la spada al controller 0.
-  // Se siamo in flat: la attacco alla camera (davanti a noi).
+  const saberHolder = new THREE.Group();
+  saberHolder.add(hilt);
+  saberHolder.add(blade);
+
+  // POSIZIONAMENTO RELATIVO DI LAMA E IMPUGNATURA
+  // - hilt centrato nell'origine del controller (mano)
+  //   -> estende ±0.1 lungo Y
+  hilt.position.set(0, 0, 0);
+
+  // - blade: base subito sopra l'impugnatura
+  //   hilt metà altezza = 0.1
+  //   blade metà altezza = 0.5
+  //   centro lama = 0.1 + 0.5 = 0.6
+  blade.position.set(0, 0.6, 0);
+  // NIENTE rotazioni strane: la lama rimane verticale
+
+  // Aggancio al controller o alla camera, a seconda di XR/flat
   let controller = null;
   if (isXR) {
     controller = renderer.xr.getController(0);
     scene.add(controller);
     controller.add(saberHolder);
   } else {
+    // in flat mode: la spada "in mano" davanti alla camera
     camera.add(saberHolder);
-    scene.add(camera); // per sicurezza
-    saberHolder.position.set(0.3, -0.2, -0.5); // leggermente in basso a destra
+    scene.add(camera);
+    saberHolder.position.set(0.25, -0.25, -0.5);
   }
 
   // --- VETTORI / QUATERNION TEMPORANEI ---
@@ -80,9 +90,9 @@ export function setupGame(scene, camera, renderer, isXR) {
   const tmpSaberDir = new THREE.Vector3();
   const tmpDroneWorldPos = new THREE.Vector3();
   const tmpBoltDir = new THREE.Vector3();
-  const tmpSaberQuat = new THREE.Quaternion();   // <-- AGGIUNTO
+  const tmpSaberQuat = new THREE.Quaternion();
 
-  // --- PICCOLO HUD DI DEBUG (facoltativo) ---
+  // --- HUD DI DEBUG ---
   let debugPanel = null;
   if (DEBUG) {
     debugPanel = document.createElement('pre');
@@ -105,7 +115,8 @@ export function setupGame(scene, camera, renderer, isXR) {
 
     camera.getWorldPosition(tmpCameraWorldPos);
     drone.getWorldPosition(tmpDroneWorldPos);
-    saber.getWorldPosition(tmpSaberWorldPos);
+    // per il debug usiamo il centro della lama
+    blade.getWorldPosition(tmpSaberWorldPos);
 
     const lines = [
       `dt: ${dt.toFixed(3)} s`,
@@ -116,7 +127,7 @@ export function setupGame(scene, camera, renderer, isXR) {
       `drone: (${tmpDroneWorldPos.x.toFixed(2)}, ${tmpDroneWorldPos.y.toFixed(
         2
       )}, ${tmpDroneWorldPos.z.toFixed(2)})`,
-      `saber: (${tmpSaberWorldPos.x.toFixed(2)}, ${tmpSaberWorldPos.y.toFixed(
+      `blade: (${tmpSaberWorldPos.x.toFixed(2)}, ${tmpSaberWorldPos.y.toFixed(
         2
       )}, ${tmpSaberWorldPos.z.toFixed(2)})`,
     ];
@@ -128,14 +139,16 @@ export function setupGame(scene, camera, renderer, isXR) {
     drone.getWorldPosition(tmpDroneWorldPos);
     bolt.position.copy(tmpDroneWorldPos);
 
-    // mira grossolanamente alla testa del giocatore
-    const target = new THREE.Vector3(0, 1.6, 0).add(
+    // mira alla testa del giocatore (camera) con un po' di jitter
+    camera.getWorldPosition(tmpCameraWorldPos);
+    const target = tmpCameraWorldPos.clone().add(
       new THREE.Vector3(
         (Math.random() - 0.5) * 0.3,
         (Math.random() - 0.5) * 0.3,
         (Math.random() - 0.5) * 0.3
       )
     );
+
     const dir = target.clone().sub(tmpDroneWorldPos).normalize();
     const velocity = dir.multiplyScalar(boltSpeed);
 
@@ -145,13 +158,12 @@ export function setupGame(scene, camera, renderer, isXR) {
 
   function updateBolts(dt) {
     camera.getWorldPosition(tmpCameraWorldPos);
-    saber.getWorldPosition(tmpSaberWorldPos);
+    // centro lama come riferimento
+    blade.getWorldPosition(tmpSaberWorldPos);
 
-    // direzione della spada (asse Y locale del cilindro)
+    // direzione della spada: asse Y locale della lama
     tmpSaberDir.set(0, 1, 0);
-
-    // ✅ FIX: usa un quaternion temporaneo come target
-    saber.getWorldQuaternion(tmpSaberQuat);
+    blade.getWorldQuaternion(tmpSaberQuat);
     tmpSaberDir.applyQuaternion(tmpSaberQuat);
     tmpSaberDir.normalize();
 
@@ -176,7 +188,7 @@ export function setupGame(scene, camera, renderer, isXR) {
         continue;
       }
 
-      // collisione con la spada
+      // collisione con la lama (sfera attorno al centro lama)
       const d = bolt.mesh.position.distanceTo(tmpSaberWorldPos);
       if (d < SABER_EFFECTIVE_RADIUS && !bolt.reflected) {
         tmpBoltDir.copy(bolt.velocity).normalize();
@@ -195,12 +207,20 @@ export function setupGame(scene, camera, renderer, isXR) {
 
   // --- FUNZIONE UPDATE CHIAMATA DAL MAIN ---
   function update(dt) {
-    // aggiorna orbita drone
+    // posizione della camera (testa) per tenere il drone alla giusta altezza
+    camera.getWorldPosition(tmpCameraWorldPos);
+
+    // orbita del drone attorno al giocatore alla stessa altezza della testa
     droneAngle += droneAngularSpeed * dt;
-    const px = Math.cos(droneAngle) * droneOrbitRadius;
-    const pz = Math.sin(droneAngle) * droneOrbitRadius;
-    drone.position.set(px, droneHeight, pz);
-    drone.lookAt(0, droneHeight, 0);
+    const centerX = tmpCameraWorldPos.x;
+    const centerZ = tmpCameraWorldPos.z;
+    const headY = tmpCameraWorldPos.y; // altezza testa giocatore
+
+    const px = centerX + Math.cos(droneAngle) * droneOrbitRadius;
+    const pz = centerZ + Math.sin(droneAngle) * droneOrbitRadius;
+
+    drone.position.set(px, headY, pz);
+    drone.lookAt(centerX, headY, centerZ);
 
     // spara periodicamente
     shootTimer += dt;
