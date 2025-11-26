@@ -2,7 +2,7 @@
 
 // Abilita / disabilita la modalità WebXR.
 // Se false: il gioco gira in 3D classico (OrbitControls, mouse).
-export const USE_XR = true;
+export const USE_XR = false;
 
 // Solo se USE_XR è true:
 // - se true: usa immersive-AR (passthrough) tramite ARButton (se supportato)

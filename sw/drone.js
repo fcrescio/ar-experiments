@@ -1,7 +1,7 @@
 // drone.js
 import { THREE } from './scene.js';
 import { DEBUG } from './config.js';
-import { SABER_EFFECTIVE_RADIUS } from './saber.js';
+import { SABER_LENGTH, SABER_EFFECTIVE_RADIUS } from './saber.js';
 
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
@@ -92,28 +92,36 @@ export class Drone {
     // colpi
     this.bolts = [];
     this.boltSpeed = 4.0;
-	// lunghezza e raggio del "lampo"
-	this.boltLength = 0.35;
-	const boltRadius = 0.003;
 
-	// cilindro lungo l’asse Z (lo ruotiamo dopo lungo la direzione di sparo)
-	this.boltGeo = new THREE.CylinderGeometry(
-	  boltRadius,
-	  boltRadius,
-	  this.boltLength,
-	  6
-	);
+    // --- geometria "laser bolt" ---
+    this.boltLength = 0.35;
+    this.boltRadius = 0.003;
 
-	// materiale "laser"
-	this.boltMat = new THREE.MeshStandardMaterial({
-	  color: 0xff5533,
-	  emissive: 0xff5533,
-	  emissiveIntensity: 3.0,
-	  metalness: 0.0,
-	  roughness: 0.2,
-	  transparent: true,
-	  opacity: 0.9,
-	});
+    // core: cilindro sottile lungo Y
+    this.boltCoreGeo = new THREE.CylinderGeometry(
+      this.boltRadius,
+      this.boltRadius,
+      this.boltLength,
+      8
+    );
+    this.boltCoreMat = new THREE.MeshStandardMaterial({
+      color: 0xff5533,
+      emissive: 0xff5533,
+      emissiveIntensity: 3.0,
+      metalness: 0.0,
+      roughness: 0.2,
+      transparent: true,
+      opacity: 0.9,
+    });
+
+    // alone: sprite additivo che dà glow
+    this.boltGlowMaterial = new THREE.SpriteMaterial({
+      color: 0xffddaa,
+      transparent: true,
+      opacity: 0.7,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
 
     this.reflectedColor = 0x00ff44;
     this.shootTimer = 0;
@@ -131,6 +139,13 @@ export class Drone {
     this._tmpToDrone = new THREE.Vector3();
     this._tmpDronePos = new THREE.Vector3();
     this._tmpBoltDir = new THREE.Vector3();
+    this._tmpFromSaberToBolt = new THREE.Vector3();
+
+    this._tmpBladeStart = new THREE.Vector3();
+    this._tmpBladeEnd = new THREE.Vector3();
+    this._tmpBladeSegment = new THREE.Vector3();
+    this._tmpToBolt = new THREE.Vector3();
+    this._tmpClosestOnBlade = new THREE.Vector3();
   }
 
   randomOffset(radius) {
@@ -244,7 +259,7 @@ export class Drone {
   }
 
   _spawnBolt() {
-    const bolt = new THREE.Mesh(this.boltGeo, this.boltMat.clone());
+    const core = new THREE.Mesh(this.boltCoreGeo, this.boltCoreMat.clone());
     this.mesh.getWorldPosition(this._tmpDronePos);
 
     // mira alla testa del giocatore
@@ -263,18 +278,29 @@ export class Drone {
     // centro del lampo: leggermente davanti al drone
     const halfLen = this.boltLength * 0.5;
     const startPos = this._tmpDronePos.clone().add(dir.clone().multiplyScalar(halfLen));
-    bolt.position.copy(startPos);
+    core.position.copy(startPos);
 
     // orienta il cilindro lungo la direzione del colpo
     const yAxis = new THREE.Vector3(0, 1, 0);
     const quat = new THREE.Quaternion().setFromUnitVectors(yAxis, dir);
-    bolt.quaternion.copy(quat);
+    core.quaternion.copy(quat);
 
     // velocità
     const velocity = dir.multiplyScalar(this.boltSpeed);
+	  //
+    // alone glow come sprite additivo
+    const glow = new THREE.Sprite(this.boltGlowMaterial.clone());
+    glow.scale.set(this.boltLength * 0.7, this.boltRadius * 0.7, 1);
+    core.add(glow);
 
-    this.scene.add(bolt);
-    this.bolts.push({ mesh: bolt, velocity, reflected: false });
+    this.scene.add(core);
+    this.bolts.push({
+      mesh: core,
+      velocity,
+      reflected: false,
+      glow,
+      age: 0,
+    });
   }
 
 
@@ -286,6 +312,9 @@ export class Drone {
     for (let i = this.bolts.length - 1; i >= 0; i--) {
       const bolt = this.bolts[i];
       bolt.mesh.position.addScaledVector(bolt.velocity, dt);
+	    
+      // età del colpo, per eventuali effetti
+      bolt.age += dt;
 
       if (bolt.mesh.position.length() > 50) {
         this.scene.remove(bolt.mesh);
@@ -303,23 +332,84 @@ export class Drone {
         this.bolts.splice(i, 1);
         continue;
       }
+	// collisione con la lama (cilindro attorno al segmento della lama)
+	const boltPos = bolt.mesh.position;
 
-      // collisione con la lama
-      const d = bolt.mesh.position.distanceTo(saberPos);
-      if (d < SABER_EFFECTIVE_RADIUS && !bolt.reflected) {
-        this._tmpBoltDir.copy(bolt.velocity).normalize();
-        const dot = this._tmpBoltDir.dot(saberDir);
-        const reflectDir = this._tmpBoltDir
-          .clone()
-          .sub(saberDir.clone().multiplyScalar(2 * dot))
-          .normalize();
+	// centro e direzione della lama
+	const bladeCenter = saberPos;        // già calcolato prima: saber.getBladeWorldPosition()
+	const bladeDir = saberDir;           // già calcolato prima: saber.getBladeWorldDirection()
 
-        bolt.velocity.copy(reflectDir.multiplyScalar(this.boltSpeed * 1.1));
-        bolt.reflected = true;
-        bolt.mesh.material.color.setHex(this.reflectedColor);
+	// calcola estremi del segmento della lama
+	const halfLen = SABER_LENGTH * 0.5;
+	this._tmpBladeStart
+	  .copy(bladeCenter)
+	  .addScaledVector(bladeDir, -halfLen);
+	this._tmpBladeEnd
+	  .copy(bladeCenter)
+	  .addScaledVector(bladeDir, halfLen);
 
-        if (this.onBoltDeflected) this.onBoltDeflected();
-      }
+	// vettore segmento
+	this._tmpBladeSegment
+	  .copy(this._tmpBladeEnd)
+	  .sub(this._tmpBladeStart);
+
+	// proietta il bolt sul segmento
+	this._tmpToBolt
+	  .copy(boltPos)
+	  .sub(this._tmpBladeStart);
+
+	const segLenSq = this._tmpBladeSegment.lengthSq();
+	let t = 0;
+	if (segLenSq > 0) {
+	  t = this._tmpToBolt.dot(this._tmpBladeSegment) / segLenSq;
+	  t = THREE.MathUtils.clamp(t, 0, 1);
+	}
+
+	// punto più vicino sulla lama
+	this._tmpClosestOnBlade
+	  .copy(this._tmpBladeStart)
+	  .addScaledVector(this._tmpBladeSegment, t);
+
+	// distanza bolt ↔ lama
+	const distToBlade = boltPos.distanceTo(this._tmpClosestOnBlade);
+
+	if (distToBlade < SABER_EFFECTIVE_RADIUS && !bolt.reflected) {
+	  // === riflessione migliorata (miglioria 1) ===
+
+	  // direzione attuale del colpo
+	  this._tmpBoltDir.copy(bolt.velocity).normalize();
+
+	  // normale locale dello "scudo": dal punto di contatto verso il bolt
+	  this._tmpFromSaberToBolt
+	    .copy(boltPos)
+	    .sub(this._tmpClosestOnBlade)
+	    .normalize();
+
+	  const n = this._tmpFromSaberToBolt;
+	  const dot = this._tmpBoltDir.dot(n);
+
+	  // R = I - 2 * dot(I, n) * n
+	  const reflectDir = this._tmpBoltDir
+	    .clone()
+	    .addScaledVector(n, -2 * dot)
+	    .normalize();
+
+	  // velocità un filo più alta dopo la deviazione
+	  bolt.velocity.copy(reflectDir.multiplyScalar(this.boltSpeed * 1.1));
+	  bolt.reflected = true;
+
+	  // core diventa verde
+	  bolt.mesh.material.color.setHex(this.reflectedColor);
+	  bolt.mesh.material.emissive.setHex(this.reflectedColor);
+
+	  // anche l’alone diventa verde se esiste
+	  if (bolt.glow) {
+	    bolt.glow.material.color.setHex(this.reflectedColor);
+	  }
+
+	  if (this.onBoltDeflected) this.onBoltDeflected();
+	}
+
     }
   }
 

@@ -4,7 +4,7 @@ import { DEBUG } from './config.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 export const SABER_LENGTH = 1.0;
-export const SABER_EFFECTIVE_RADIUS = SABER_LENGTH * 0.5;
+export const SABER_EFFECTIVE_RADIUS = 0.03;
 
 export class Saber {
   constructor(scene, camera, renderer, isXR, handedness = 'right', audioListener = null) {
@@ -12,6 +12,8 @@ export class Saber {
     this.camera = camera;
     this.renderer = renderer;
     this.isXR = isXR;
+    this.attachedToController = false;
+    this.fallbackAttachedToCamera = false;
     this.audioListener = audioListener;
 
     this.bladeThickness = 0.01;
@@ -47,7 +49,7 @@ export class Saber {
 
         this.hilt.add(this.hiltModelRoot);
 
-        this.ready = true;
+        this.hiltReady = true;
         if (DEBUG) console.log('Lightsaber GLB caricato');
       },
       undefined,
@@ -168,6 +170,7 @@ export class Saber {
         const input = evt.data;
         if (input && input.handedness === handedness) {
           c.add(this.holder);
+	  this.attachedToController = true;
           if (DEBUG) console.log(`Spada agganciata alla mano ${handedness} (controller ${i})`);
         }
       });
@@ -187,6 +190,17 @@ export class Saber {
     return target;
   }
   update(dt) {
+    if (
+      this.isXR &&
+      !this.attachedToController &&
+      !this.fallbackAttachedToCamera
+    ) {
+      this.camera.add(this.holder);
+      this.fallbackAttachedToCamera = true;
+      this.holder.position.set(0.25, -0.25, -0.5);
+
+      if (DEBUG) console.log('XR senza controller: spada agganciata alla camera (modalità telefono).');
+    }
     if (
       !this.audio ||
       !this.audioContext ||
