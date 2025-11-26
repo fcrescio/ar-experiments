@@ -114,14 +114,19 @@ export class Drone {
       opacity: 0.9,
     });
 
-    // alone: sprite additivo che dà glow
-    this.boltGlowMaterial = new THREE.SpriteMaterial({
-      color: 0xffddaa,
-      transparent: true,
-      opacity: 0.7,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
+	// alone: plane additivo che dà glow lungo il colpo
+	this.boltGlowGeo = new THREE.PlaneGeometry(
+	  this.boltRadius * 8,        // spessore "glow"
+	  this.boltLength * 1.1       // lunghezza un po' > del core
+	);
+	this.boltGlowMat = new THREE.MeshBasicMaterial({
+	  color: 0xffddaa,
+	  transparent: true,
+	  opacity: 0.7,
+	  blending: THREE.AdditiveBlending,
+	  depthWrite: false,
+	  side: THREE.DoubleSide,
+	});
 
     this.reflectedColor = 0x00ff44;
     this.shootTimer = 0;
@@ -288,10 +293,10 @@ export class Drone {
     // velocità
     const velocity = dir.multiplyScalar(this.boltSpeed);
 	  //
-    // alone glow come sprite additivo
-    const glow = new THREE.Sprite(this.boltGlowMaterial.clone());
-    glow.scale.set(this.boltLength * 0.7, this.boltRadius * 0.7, 1);
-    core.add(glow);
+	// alone glow come plane additivo allineato al bolt
+	const glow = new THREE.Mesh(this.boltGlowGeo, this.boltGlowMat.clone());
+	glow.position.set(0, 0, 0); // al centro del core
+	core.add(glow);
 
     this.scene.add(core);
     this.bolts.push({
