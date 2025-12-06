@@ -164,7 +164,7 @@ export class Saber {
     const scene = this.scene;
 
     for (let i = 0; i < 2; i++) {
-      const c = renderer.xr.getController(i);
+      const c = renderer.xr.getControllerGrip(i);
       scene.add(c);
       c.addEventListener('connected', (evt) => {
         const input = evt.data;
