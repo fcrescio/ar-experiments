@@ -153,6 +153,14 @@ export class Drone {
     this._tmpBladeSegment = new THREE.Vector3();
     this._tmpToBolt = new THREE.Vector3();
     this._tmpClosestOnBlade = new THREE.Vector3();
+    this._tmpBoltStart = new THREE.Vector3();
+    this._tmpClosestOnBoltPath = new THREE.Vector3();
+
+    this._tmpSegU = new THREE.Vector3();
+    this._tmpSegV = new THREE.Vector3();
+    this._tmpSegW = new THREE.Vector3();
+
+    this._tmpVelDelta = new THREE.Vector3();
     this._tmpQuat = new THREE.Quaternion();
     this._tmpYAxis = new THREE.Vector3(0, 1, 0);
   }
@@ -315,31 +323,120 @@ export class Drone {
   }
 
 
+  _closestPointsOnSegments(p1, q1, p2, q2, outP1, outP2) {
+    // segmenti:
+    // S1(s) = p1 + s * (q1 - p1), s in [0, 1]
+    // S2(t) = p2 + t * (q2 - p2), t in [0, 1]
+
+    const u = this._tmpSegU.copy(q1).sub(p1);   // direzione S1
+    const v = this._tmpSegV.copy(q2).sub(p2);   // direzione S2
+    const w = this._tmpSegW.copy(p1).sub(p2);   // p1 - p2
+
+    const a = u.dot(u); // |u|^2
+    const b = u.dot(v);
+    const c = v.dot(v); // |v|^2
+    const d = u.dot(w);
+    const e = v.dot(w);
+
+    const EPS = 1e-6;
+    let sN, sD = a * c - b * b; // denominatore per s
+    let tN, tD = sD;            // denominatore per t
+
+    // segmenti quasi paralleli
+    if (sD < EPS) {
+      sN = 0.0;   // forza s = 0
+      sD = 1.0;   // evita divisione per zero
+      tN = e;
+      tD = c;
+    } else {
+      // s non vincolato
+      sN = (b * e - c * d);
+      tN = (a * e - b * d);
+
+      // clamp s a [0,1]
+      if (sN < 0.0) {
+        sN = 0.0;
+        tN = e;
+        tD = c;
+      } else if (sN > sD) {
+        sN = sD;
+        tN = e + b;
+        tD = c;
+      }
+    }
+
+    // clamp t a [0,1] a seconda di s
+    if (tN < 0.0) {
+      tN = 0.0;
+      if (-d < 0.0) {
+        sN = 0.0;
+      } else if (-d > a) {
+        sN = sD;
+      } else {
+        sN = -d;
+        sD = a;
+      }
+    } else if (tN > tD) {
+      tN = tD;
+      if ((-d + b) < 0.0) {
+        sN = 0.0;
+      } else if ((-d + b) > a) {
+        sN = sD;
+      } else {
+        sN = (-d + b);
+        sD = a;
+      }
+    }
+
+    const sc = (Math.abs(sN) < EPS ? 0.0 : sN / sD);
+    const tc = (Math.abs(tN) < EPS ? 0.0 : tN / tD);
+
+    // punti più vicini sui due segmenti
+    outP1.copy(p1).addScaledVector(u, sc);
+    outP2.copy(p2).addScaledVector(v, tc);
+  }
+
   _updateBolts(dt, saber) {
+    // posizione della camera (giocatore)
     this.camera.getWorldPosition(this._tmpCameraPos);
+
+    // linea della lama
     const saberPos = saber.getBladeWorldPosition();
     const saberDir = saber.getBladeWorldDirection();
 
+    const halfLen = SABER_LENGTH * 0.5;
+    this._tmpBladeStart
+      .copy(saberPos)
+      .addScaledVector(saberDir, -halfLen);
+    this._tmpBladeEnd
+      .copy(saberPos)
+      .addScaledVector(saberDir, halfLen);
+
     for (let i = this.bolts.length - 1; i >= 0; i--) {
       const bolt = this.bolts[i];
-      bolt.mesh.position.addScaledVector(bolt.velocity, dt);
-      if (bolt.velocity.lengthSq() > 1e-6) {
-        const dir = this._tmpBoltDir.copy(bolt.velocity).normalize();
-        this._tmpQuat.setFromUnitVectors(this._tmpYAxis, dir);
-        bolt.mesh.quaternion.copy(this._tmpQuat);
-      }
 
-	    
-      // età del colpo, per eventuali effetti
+      // --- traiettoria continua del bolt nel frame ---
+      // posizione all'inizio del frame
+      const boltStart = this._tmpBoltStart.copy(bolt.mesh.position);
+
+      // spostamento in questo frame
+      this._tmpVelDelta.copy(bolt.velocity).multiplyScalar(dt);
+      bolt.mesh.position.add(this._tmpVelDelta);
+
+      // posizione a fine frame
+      const boltEnd = bolt.mesh.position;
+
+      // età del colpo
       bolt.age += dt;
 
+      // troppo lontano -> rimuovi
       if (bolt.mesh.position.length() > 50) {
         this.scene.remove(bolt.mesh);
         this.bolts.splice(i, 1);
         continue;
       }
 
-      // colpisce il giocatore
+      // colpisce il giocatore (per ora controllo puntuale a fine frame)
       if (
         bolt.mesh.position.distanceTo(this._tmpCameraPos) < 0.15 &&
         !bolt.reflected
@@ -350,87 +447,71 @@ export class Drone {
         this.bolts.splice(i, 1);
         continue;
       }
-	// collisione con la lama (cilindro attorno al segmento della lama)
-	const boltPos = bolt.mesh.position;
 
-	// centro e direzione della lama
-	const bladeCenter = saberPos;        // già calcolato prima: saber.getBladeWorldPosition()
-	const bladeDir = saberDir;           // già calcolato prima: saber.getBladeWorldDirection()
+      // --- collisione continuo bolt-lama (segmento-segmento) ---
+      if (!bolt.reflected) {
+        // punto minimo tra il segmento del bolt e il segmento della lama
+        this._closestPointsOnSegments(
+          boltStart,
+          boltEnd,
+          this._tmpBladeStart,
+          this._tmpBladeEnd,
+          this._tmpClosestOnBoltPath,
+          this._tmpClosestOnBlade
+        );
 
-	// calcola estremi del segmento della lama
-	const halfLen = SABER_LENGTH * 0.5;
-	this._tmpBladeStart
-	  .copy(bladeCenter)
-	  .addScaledVector(bladeDir, -halfLen);
-	this._tmpBladeEnd
-	  .copy(bladeCenter)
-	  .addScaledVector(bladeDir, halfLen);
+        const distToBlade = this._tmpClosestOnBoltPath.distanceTo(
+          this._tmpClosestOnBlade
+        );
 
-	// vettore segmento
-	this._tmpBladeSegment
-	  .copy(this._tmpBladeEnd)
-	  .sub(this._tmpBladeStart);
+        if (distToBlade < SABER_EFFECTIVE_RADIUS) {
+          // porta il bolt esattamente sul punto di impatto
+          bolt.mesh.position.copy(this._tmpClosestOnBoltPath);
 
-	// proietta il bolt sul segmento
-	this._tmpToBolt
-	  .copy(boltPos)
-	  .sub(this._tmpBladeStart);
+          // --- riflessione come prima, ma usando il punto di impatto ---
+          this._tmpBoltDir.copy(bolt.velocity).normalize();
 
-	const segLenSq = this._tmpBladeSegment.lengthSq();
-	let t = 0;
-	if (segLenSq > 0) {
-	  t = this._tmpToBolt.dot(this._tmpBladeSegment) / segLenSq;
-	  t = THREE.MathUtils.clamp(t, 0, 1);
-	}
+          this._tmpFromSaberToBolt
+            .copy(this._tmpClosestOnBoltPath)
+            .sub(this._tmpClosestOnBlade)
+            .normalize();
 
-	// punto più vicino sulla lama
-	this._tmpClosestOnBlade
-	  .copy(this._tmpBladeStart)
-	  .addScaledVector(this._tmpBladeSegment, t);
+          const n = this._tmpFromSaberToBolt;
+          const dot = this._tmpBoltDir.dot(n);
 
-	// distanza bolt ↔ lama
-	const distToBlade = boltPos.distanceTo(this._tmpClosestOnBlade);
+          // R = I - 2 * dot(I, n) * n
+          const reflectDir = this._tmpBoltDir
+            .clone()
+            .addScaledVector(n, -2 * dot)
+            .normalize();
 
-	if (distToBlade < SABER_EFFECTIVE_RADIUS && !bolt.reflected) {
-	  // === riflessione migliorata (miglioria 1) ===
+          // velocità un filo più alta dopo la deviazione
+          bolt.velocity.copy(reflectDir.multiplyScalar(this.boltSpeed * 1.1));
+          bolt.reflected = true;
 
-	  // direzione attuale del colpo
-	  this._tmpBoltDir.copy(bolt.velocity).normalize();
+          // core diventa verde
+          bolt.mesh.material.color.setHex(this.reflectedColor);
+          bolt.mesh.material.emissive.setHex(this.reflectedColor);
 
-	  // normale locale dello "scudo": dal punto di contatto verso il bolt
-	  this._tmpFromSaberToBolt
-	    .copy(boltPos)
-	    .sub(this._tmpClosestOnBlade)
-	    .normalize();
-
-	  const n = this._tmpFromSaberToBolt;
-	  const dot = this._tmpBoltDir.dot(n);
-
-	  // R = I - 2 * dot(I, n) * n
-	  const reflectDir = this._tmpBoltDir
-	    .clone()
-	    .addScaledVector(n, -2 * dot)
-	    .normalize();
-
-	  // velocità un filo più alta dopo la deviazione
-	  bolt.velocity.copy(reflectDir.multiplyScalar(this.boltSpeed * 1.1));
-	  bolt.reflected = true;
-
-	  // core diventa verde
-	  bolt.mesh.material.color.setHex(this.reflectedColor);
-	  bolt.mesh.material.emissive.setHex(this.reflectedColor);
-
-	  // anche l’alone diventa verde se esiste
-	  if (bolt.glow) {
-	    bolt.glow.material.color.setHex(this.reflectedColor);
-	  }
+          // anche l’alone diventa verde se esiste
+          if (bolt.glow) {
+            bolt.glow.material.color.setHex(this.reflectedColor);
+          }
 
 	  this._playDeflectSound(bolt.mesh);
-	  if (this.onBoltDeflected) this.onBoltDeflected();
-	}
+          if (this.onBoltDeflected) this.onBoltDeflected();
+        }
+      }
 
+      // --- orienta il bolt lungo la direzione di movimento finale ---
+      if (bolt.velocity.lengthSq() > 1e-6) {
+        const dir = this._tmpBoltDir.copy(bolt.velocity).normalize();
+        this._tmpQuat.setFromUnitVectors(this._tmpYAxis, dir);
+        bolt.mesh.quaternion.copy(this._tmpQuat);
+      }
     }
   }
+
 
   _playShotSound(parentObject3D) {
     if (!this.audioListener || !this.audioCtx) return;
