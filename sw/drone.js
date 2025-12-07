@@ -93,7 +93,21 @@ export class Drone {
 
     // colpi
     this.bolts = [];
+
+    // velocità media "base", usata come riferimento
     this.boltSpeed = 4.0;
+
+    // RANGE velocità colpi (m/s)
+    this.minBoltSpeed = 3.0;
+    this.maxBoltSpeed = 7.0;
+
+    // INTERVALLI di fuoco
+    this.shootTimer = 0;
+    this.shootInterval = 1.6;     // valore iniziale (verrà subito ricalcolato)
+    this.minShootInterval = 0.35; // molto vicino = fuoco intenso
+    this.maxShootInterval = 2.0;  // molto lontano = fuoco lento
+
+    this.currentDistanceToPlayer = this.baseDistance;
 
     // --- geometria "laser bolt" ---
     this.boltLength = 0.35;
@@ -131,8 +145,6 @@ export class Drone {
 	});
 
     this.reflectedColor = 0x00ff44;
-    this.shootTimer = 0;
-    this.shootInterval = 1.6;
 
     // callback da assegnare da fuori
     this.onPlayerHit = null;
@@ -273,6 +285,39 @@ export class Drone {
       this.stateTimer = 0;
       this.targetOffset = this.randomOffset(this.dashRadius);
     }
+    // aggiorna la distanza attuale dal giocatore
+    this.currentDistanceToPlayer = this.mesh.position.distanceTo(
+      this._tmpCameraPos
+    );
+  }
+
+  _scheduleNextShot() {
+    // distanza attuale dal giocatore (fallback sulla baseDistance)
+    const d = this.currentDistanceToPlayer || this.baseDistance;
+
+    // mappiamo la distanza in [near, far]
+    const near = 1.3; // molto vicino
+    const far  = 4.0; // abbastanza lontano
+
+    const t = THREE.MathUtils.clamp(
+      (d - near) / (far - near),
+      0.0,
+      1.0
+    );
+
+    // t=0 (molto vicino)  -> minShootInterval
+    // t=1 (molto lontano) -> maxShootInterval
+    const baseInterval = THREE.MathUtils.lerp(
+      this.minShootInterval,
+      this.maxShootInterval,
+      t
+    );
+
+    // jitter random (±30%)
+    const jitterFactor = THREE.MathUtils.randFloat(0.7, 1.3);
+
+    this.shootInterval = baseInterval * jitterFactor;
+    this.shootTimer = 0;
   }
 
   _spawnBolt() {
@@ -302,8 +347,13 @@ export class Drone {
     const quat = new THREE.Quaternion().setFromUnitVectors(yAxis, dir);
     core.quaternion.copy(quat);
 
-    // velocità
-    const velocity = dir.multiplyScalar(this.boltSpeed);
+    // velocità random nel range [minBoltSpeed, maxBoltSpeed]
+    const speed = THREE.MathUtils.randFloat(
+      this.minBoltSpeed,
+      this.maxBoltSpeed
+    );
+    const velocity = dir.multiplyScalar(speed);
+
 	  //
 	// alone glow come plane additivo allineato al bolt
 	const glow = new THREE.Mesh(this.boltGlowGeo, this.boltGlowMat.clone());
@@ -485,8 +535,11 @@ export class Drone {
             .addScaledVector(n, -2 * dot)
             .normalize();
 
-          // velocità un filo più alta dopo la deviazione
-          bolt.velocity.copy(reflectDir.multiplyScalar(this.boltSpeed * 1.1));
+          // mantieni la velocità attuale del colpo e aumentala un po'
+          const currentSpeed = bolt.velocity.length();
+          bolt.velocity.copy(
+            reflectDir.multiplyScalar(currentSpeed * 1.1)
+          );
           bolt.reflected = true;
 
           // core diventa verde
@@ -671,8 +724,8 @@ export class Drone {
 
     this.shootTimer += dt;
     if (this.shootTimer > this.shootInterval) {
-      this.shootTimer = 0;
       this._spawnBolt();
+      this._scheduleNextShot();
     }
 
     this._updateBolts(dt, saber);
