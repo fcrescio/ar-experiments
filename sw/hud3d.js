@@ -27,7 +27,7 @@ export class ScorePanel3D {
     this.mesh = new THREE.Mesh(geo, mat);
 
     // posizione nel mondo – “lontano ma visibile”
-    this.mesh.position.set(1.5, 2.0, -2.0);
+    this.mesh.position.set(1.5, 1.0, -2.0);
     this.mesh.lookAt(0, 1.6, 0);
 
     scene.add(this.mesh);
