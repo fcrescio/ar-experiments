@@ -6,9 +6,11 @@ import { SABER_LENGTH, SABER_EFFECTIVE_RADIUS } from './saber.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 export class Drone {
-  constructor(scene, camera) {
+  constructor(scene, camera, audioListener) {
     this.scene = scene;
     this.camera = camera;
+    this.audioListener = audioListener;
+    this.audioCtx = (audioListener ? audioListener.context : null);
 
     // --- mesh del drone ---
     this.mesh = new THREE.Group();   // placeholder
@@ -74,9 +76,9 @@ export class Drone {
     this.stateDuration = 2.0;
 
     this.idleLerpSpeed = 1.5;
-    this.dashLerpSpeed = 8.0;
+    this.dashLerpSpeed = 10.0;
 
-    this.baseDistance = 1.6;
+    this.baseDistance = 2.6;
     this.idleRadius = 0.25;
     this.dashRadius = 0.45;
 
@@ -306,6 +308,8 @@ export class Drone {
       glow,
       age: 0,
     });
+
+    this._playShotSound(core);
   }
 
 
@@ -416,6 +420,53 @@ export class Drone {
 	}
 
     }
+  }
+
+  _playShotSound(parentObject3D) {
+    if (!this.audioListener || !this.audioContext) return;
+
+    const ctx = this.audioContext;
+
+    // Oscillatore tipo "laser"
+    const osc = ctx.createOscillator();
+    osc.type = 'sawtooth';
+
+    // Pitch sweep: tono alto -> basso
+    osc.frequency.setValueAtTime(800, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(
+      180,
+      ctx.currentTime + 0.18
+    );
+
+    // Envelope di volume molto corto
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.5, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.18);
+
+    // Audio posizionale Three.js
+    const audio = new THREE.PositionalAudio(this.audioListener);
+    audio.setRefDistance(2.0);
+    audio.setRolloffFactor(1.5);
+
+    // Collegamento nodo → PositionalAudio
+    osc.connect(gain);
+    audio.setNodeSource(gain);
+
+    // Attacchiamo il suono all'oggetto nello spazio
+    parentObject3D.add(audio);
+
+    // Partenza e stop
+    const now = ctx.currentTime;
+    osc.start(now);
+    osc.stop(now + 0.2);
+
+    // Pulizia (rimuovi il nodo dalla scena quando finisce)
+    osc.onended = () => {
+      if (audio.parent) {
+        audio.parent.remove(audio);
+      }
+    };
   }
 
   update(dt, saber) {

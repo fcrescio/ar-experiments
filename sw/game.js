@@ -9,7 +9,7 @@ export function setupGame(scene, camera, renderer, isXR, audioListener) {
   const saber = new Saber(scene, camera, renderer, isXR, 'right', audioListener);
 
   // crea drone
-  const drone = new Drone(scene, camera);
+  const drone = new Drone(scene, camera, audioListener);
 
   // crea pannello punteggio
   const scorePanel = new ScorePanel3D(scene);
