@@ -170,7 +170,15 @@ export class Saber {
         const input = evt.data;
         if (input && input.handedness === handedness) {
           c.add(this.holder);
+          // *** reset del transform locale rispetto al controller ***
+          this.holder.position.set(0, 0, 0);
+          this.holder.rotation.set(0, 0, 0);
+
+          // ora orientiamo la spada in avanti rispetto alla mano
+          // (da Y-up a -Z-forward, aggiusta a gusto)
+          this.holder.rotateX(-Math.PI / 2);
 	  this.attachedToController = true;
+	  this.fallbackAttachedToCamera = false;
           if (DEBUG) console.log(`Spada agganciata alla mano ${handedness} (controller ${i})`);
         }
       });
@@ -190,7 +198,6 @@ export class Saber {
     return target;
   }
   update(dt) {
-	  /*
     if (
       this.isXR &&
       !this.attachedToController &&
@@ -202,7 +209,6 @@ export class Saber {
 
       if (DEBUG) console.log('XR senza controller: spada agganciata alla camera (modalità telefono).');
     }
-    */
     if (
       !this.audio ||
       !this.audioContext ||
