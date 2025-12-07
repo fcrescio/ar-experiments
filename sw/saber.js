@@ -190,6 +190,7 @@ export class Saber {
     return target;
   }
   update(dt) {
+	  /*
     if (
       this.isXR &&
       !this.attachedToController &&
@@ -201,6 +202,7 @@ export class Saber {
 
       if (DEBUG) console.log('XR senza controller: spada agganciata alla camera (modalità telefono).');
     }
+    */
     if (
       !this.audio ||
       !this.audioContext ||
