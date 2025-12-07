@@ -153,6 +153,8 @@ export class Drone {
     this._tmpBladeSegment = new THREE.Vector3();
     this._tmpToBolt = new THREE.Vector3();
     this._tmpClosestOnBlade = new THREE.Vector3();
+    this._tmpQuat = new THREE.Quaternion();
+    this._tmpYAxis = new THREE.Vector3(0, 1, 0);
   }
 
   randomOffset(radius) {
@@ -321,6 +323,12 @@ export class Drone {
     for (let i = this.bolts.length - 1; i >= 0; i--) {
       const bolt = this.bolts[i];
       bolt.mesh.position.addScaledVector(bolt.velocity, dt);
+      if (bolt.velocity.lengthSq() > 1e-6) {
+        const dir = this._tmpBoltDir.copy(bolt.velocity).normalize();
+        this._tmpQuat.setFromUnitVectors(this._tmpYAxis, dir);
+        bolt.mesh.quaternion.copy(this._tmpQuat);
+      }
+
 	    
       // età del colpo, per eventuali effetti
       bolt.age += dt;

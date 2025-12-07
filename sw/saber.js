@@ -4,7 +4,7 @@ import { DEBUG } from './config.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 export const SABER_LENGTH = 1.0;
-export const SABER_EFFECTIVE_RADIUS = 0.03;
+export const SABER_EFFECTIVE_RADIUS = 0.08;
 
 export class Saber {
   constructor(scene, camera, renderer, isXR, handedness = 'right', audioListener = null) {
