@@ -336,6 +336,7 @@ export class Drone {
         bolt.mesh.position.distanceTo(this._tmpCameraPos) < 0.15 &&
         !bolt.reflected
       ) {
+	this._playHitSound(this.camera);
         if (this.onPlayerHit) this.onPlayerHit();
         this.scene.remove(bolt.mesh);
         this.bolts.splice(i, 1);
@@ -416,6 +417,7 @@ export class Drone {
 	    bolt.glow.material.color.setHex(this.reflectedColor);
 	  }
 
+	  this._playDeflectSound(bolt.mesh);
 	  if (this.onBoltDeflected) this.onBoltDeflected();
 	}
 
@@ -423,9 +425,9 @@ export class Drone {
   }
 
   _playShotSound(parentObject3D) {
-    if (!this.audioListener || !this.audioContext) return;
+    if (!this.audioListener || !this.audioCtx) return;
 
-    const ctx = this.audioContext;
+    const ctx = this.audioCtx;
 
     // Oscillatore tipo "laser"
     const osc = ctx.createOscillator();
@@ -468,6 +470,87 @@ export class Drone {
       }
     };
   }
+
+  _playDeflectSound(parentObject3D) {
+    if (!this.audioListener || !this.audioCtx) return;
+
+    const ctx = this.audioCtx;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'square';
+
+    // Sweep breve verso l'alto (ping)
+    osc.frequency.setValueAtTime(500, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(
+      1500,
+      ctx.currentTime + 0.08
+    );
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.4, ctx.currentTime + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.12);
+
+    const audio = new THREE.PositionalAudio(this.audioListener);
+    audio.setRefDistance(1.5);
+    audio.setRolloffFactor(2.0);
+
+    osc.connect(gain);
+    audio.setNodeSource(gain);
+
+    parentObject3D.add(audio);
+
+    const now = ctx.currentTime;
+    osc.start(now);
+    osc.stop(now + 0.13);
+
+    osc.onended = () => {
+      if (audio.parent) {
+        audio.parent.remove(audio);
+      }
+    };
+  }
+
+  _playHitSound(parentObject3D) {
+    if (!this.audioListener || !this.audioCtx) return;
+
+    const ctx = this.audioCtx;
+
+    const osc = ctx.createOscillator();
+    osc.type = 'triangle';
+
+    // Piccolo "thud": frequenza medio-bassa
+    osc.frequency.setValueAtTime(200, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(
+      80,
+      ctx.currentTime + 0.18
+    );
+
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.6, ctx.currentTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.2);
+
+    const audio = new THREE.PositionalAudio(this.audioListener);
+    audio.setRefDistance(1.0);
+    audio.setRolloffFactor(1.5);
+
+    osc.connect(gain);
+    audio.setNodeSource(gain);
+
+    parentObject3D.add(audio);
+
+    const now = ctx.currentTime;
+    osc.start(now);
+    osc.stop(now + 0.22);
+
+    osc.onended = () => {
+      if (audio.parent) {
+        audio.parent.remove(audio);
+      }
+    };
+  }
+
 
   update(dt, saber) {
     // 1) aggiorna animazione del modello, se c’è
