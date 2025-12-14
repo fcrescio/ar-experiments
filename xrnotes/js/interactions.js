@@ -1,5 +1,20 @@
 import { setNoteHighlight } from './utils.js';
 
+const PRIMARY_BUTTON_CANDIDATES = [4, 0, 1];
+
+function getActionButtonIndex(controller) {
+  const handedness = controller.userData.handedness;
+  const gamepad = controller.userData.gamepad;
+  if (!gamepad?.buttons?.length) return null;
+  const stored = localStorage.getItem(`xrnotes-primary-${handedness || 'any'}`);
+  const storedIdx = Number(stored);
+  if (!Number.isNaN(storedIdx) && gamepad.buttons[storedIdx]) return storedIdx;
+  for (const idx of PRIMARY_BUTTON_CANDIDATES) {
+    if (gamepad.buttons[idx]) return idx;
+  }
+  return 0;
+}
+
 export function createInteractions({
   controllers,
   reticle,
@@ -25,12 +40,12 @@ export function createInteractions({
     setStatus?.(`${mesh.userData.label} selected. Choose another to connect.`);
   }
 
-  function updateHover(controller) {
+  function updateNoteHover(controller) {
     tempMatrix.identity().extractRotation(controller.matrixWorld);
     raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
     raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
     const intersects = raycaster.intersectObjects(Array.from(notesManager.notes.values()));
-    const previous = controller.userData.hovered;
+    const previous = controller.userData.hoveredNote;
     const next = intersects[0]?.object ?? null;
     if (previous && previous !== next) {
       setNoteHighlight(previous, false);
@@ -38,20 +53,24 @@ export function createInteractions({
     if (next && next !== previous) {
       setNoteHighlight(next, true);
     }
-    controller.userData.hovered = next?.userData?.isPanelButton ? null : next;
-    return controller.userData.hovered;
+    controller.userData.hoveredNote = next;
+    return controller.userData.hoveredNote;
   }
 
   function handleSelect(controller) {
-    const hovered = controller.userData.hovered;
-    if (recorder.isRecording()) return;
-    if (hovered?.userData?.isPanelButton) {
-      notesManager.recallNote(hovered.userData.noteId, camera, tempVec);
+    if (recorder.isRecording()) {
+      recorder.stopRecording();
       return;
     }
-    if (hovered) {
-      setSelection(hovered);
-      notesManager.playNote(hovered, audioContext);
+    const hoveredNote = controller.userData.hoveredNote;
+    const hoveredPanel = controller.userData.hoveredPanel;
+    if (hoveredPanel) {
+      notesManager.recallNote(hoveredPanel.userData.noteId, camera, tempVec);
+      return;
+    }
+    if (hoveredNote && !hoveredNote.userData?.isPanelButton) {
+      setSelection(hoveredNote);
+      notesManager.playNote(hoveredNote, audioContext);
       return;
     }
     const placed = notesManager.placeNoteAtReticle();
@@ -61,9 +80,9 @@ export function createInteractions({
   }
 
   function handleSelectStart(controller) {
-    const hovered = controller.userData.hovered;
-    if (hovered && !hovered.userData?.isPanelButton) {
-      recorder.startRecordingFor(hovered);
+    const hoveredNote = controller.userData.hoveredNote;
+    if (hoveredNote && !hoveredNote.userData?.isPanelButton) {
+      recorder.startRecordingFor(hoveredNote);
     }
   }
 
@@ -71,21 +90,28 @@ export function createInteractions({
     if (recorder.isRecording()) recorder.stopRecording();
   }
 
-  function updateControllers() {
+  function updateControllers(timestamp) {
     for (const controller of controllers) {
-      updateHover(controller);
+      updateNoteHover(controller);
       const btn = panelManager.panelRaycast(controller, raycaster);
-      if (btn && controller.userData.hovered !== btn) {
-        controller.userData.hovered = btn;
+      if (btn !== controller.userData.hoveredPanel) {
+        panelManager.setButtonHighlight(controller.userData.hoveredPanel, false);
+        panelManager.setButtonHighlight(btn, true);
+        controller.userData.hoveredPanel = btn;
       }
 
       const gamepad = controller.userData.gamepad;
-      const aPressed = gamepad?.buttons?.[4]?.pressed;
-      if (aPressed && !controller.userData.buttonAPressed) {
+      const actionIndex = getActionButtonIndex(controller);
+      const actionPressed = actionIndex !== null && gamepad?.buttons?.[actionIndex]?.pressed;
+      if (recorder.isRecording() && gamepad?.buttons?.[1]?.pressed) {
+        recorder.cancel();
+      }
+      if (actionPressed && !controller.userData.actionPressed) {
         notesManager.placeNoteAtController(controller);
       }
-      controller.userData.buttonAPressed = !!aPressed;
+      controller.userData.actionPressed = !!actionPressed;
     }
+    recorder.update(timestamp);
   }
 
   return {

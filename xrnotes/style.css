@@ -2,6 +2,9 @@
   color-scheme: light dark;
   --panel-bg: rgba(0, 0, 0, 0.55);
   --panel-border: rgba(255, 255, 255, 0.15);
+  --status-ok: #22c55e;
+  --status-warn: #f97316;
+  --status-error: #ef4444;
 }
 
 body {
@@ -12,15 +15,60 @@ body {
   color: #fff;
 }
 
-#session {
+.overlay {
   position: fixed;
-  top: 12px;
-  left: 12px;
   padding: 6px 10px;
   background: var(--panel-bg);
   border: 1px solid var(--panel-border);
   border-radius: 10px;
   font-size: 12px;
-  opacity: 0.85;
+  opacity: 0.9;
   z-index: 10;
+  backdrop-filter: blur(6px);
+}
+
+#session {
+  top: 12px;
+  left: 12px;
+}
+
+#status {
+  top: 12px;
+  right: 12px;
+  min-width: 180px;
+}
+
+#status[data-tone='error'] {
+  border-color: rgba(239, 68, 68, 0.4);
+  color: var(--status-error);
+}
+
+#status[data-tone='warn'] {
+  border-color: rgba(249, 115, 22, 0.4);
+  color: var(--status-warn);
+}
+
+#status[data-tone='info'] {
+  color: #fff;
+}
+
+#recording {
+  position: fixed;
+  bottom: 12px;
+  left: 12px;
+  background: rgba(239, 68, 68, 0.18);
+  border: 1px solid rgba(239, 68, 68, 0.5);
+  color: #fecaca;
+  padding: 8px 12px;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  opacity: 0.75;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  z-index: 10;
+}
+
+#recording.active {
+  opacity: 1;
+  transform: scale(1.02);
 }

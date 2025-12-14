@@ -1,23 +1,29 @@
 import * as THREE from 'three';
 import { pickColor } from './utils.js';
 
-export function createNotesManager(scene, reticle, tempVec, setStatus, onChange, onRemove) {
+export function createNotesManager(scene, reticle, tempVec, { setStatus, onChange, onRemove, initialCounter = 1 } = {}) {
   const notes = new Map();
   const lines = new Set();
-  let noteCounter = 1;
+  let noteCounter = initialCounter;
 
-  function createNoteMesh(position) {
-    const id = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(16).slice(2);
-    const label = `Note ${noteCounter++}`;
+  function createNoteMesh(position, existingData = {}) {
+    const id = existingData.id ?? (crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(16).slice(2));
+    const label = existingData.label ?? `Note ${noteCounter++}`;
+    const color = existingData.color ?? pickColor();
     const geometry = new THREE.SphereGeometry(0.055, 32, 32);
-    const material = new THREE.MeshStandardMaterial({ color: pickColor(), roughness: 0.4, metalness: 0.05 });
+    const material = new THREE.MeshStandardMaterial({ color, roughness: 0.4, metalness: 0.05 });
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.copy(position);
-    mesh.userData = { id, label, audioBuffer: null };
+    mesh.userData = {
+      id,
+      label,
+      audioBuffer: existingData.audioBuffer ?? null,
+      audioBlob: existingData.audioBlob ?? null
+    };
     scene.add(mesh);
     notes.set(id, mesh);
-    onChange?.();
-    setStatus?.(`${label} placed.`);
+    onChange?.({ type: 'add', note: mesh, noteCounter });
+    if (!existingData.silent) setStatus?.(`${label} placed.`);
     return mesh;
   }
 
@@ -53,10 +59,11 @@ export function createNotesManager(scene, reticle, tempVec, setStatus, onChange,
         line.geometry.dispose();
         line.material.dispose();
         lines.delete(line);
+        onChange?.({ type: 'disconnect', ids: line.userData.ids });
       }
     }
     onRemove?.(mesh);
-    onChange?.();
+    onChange?.({ type: 'remove', note: mesh });
   }
 
   function connectNotes(a, b) {
@@ -67,6 +74,7 @@ export function createNotesManager(scene, reticle, tempVec, setStatus, onChange,
     line.userData.ids = [a.userData.id, b.userData.id];
     scene.add(line);
     lines.add(line);
+    onChange?.({ type: 'connect', ids: line.userData.ids, line });
   }
 
   function updateLineGeometry(line) {
@@ -94,12 +102,36 @@ export function createNotesManager(scene, reticle, tempVec, setStatus, onChange,
       if (line.userData.ids.includes(id)) updateLineGeometry(line);
     }
     setStatus?.(`${mesh.userData.label} moved in front of you.`);
+    onChange?.({ type: 'move', note: mesh });
   }
 
   function updateLines() {
     for (const line of lines) {
       updateLineGeometry(line);
     }
+  }
+
+  function loadFromData(noteData = [], lineData = []) {
+    const seenLabels = [];
+    for (const saved of noteData) {
+      const position = new THREE.Vector3(...(saved.position ?? [0, 0, 0]));
+      createNoteMesh(position, { ...saved, silent: true });
+      const labelNumber = Number(saved.label?.split(' ')[1]);
+      if (!Number.isNaN(labelNumber)) seenLabels.push(labelNumber);
+    }
+    for (const entry of lineData) {
+      const [idA, idB] = entry.ids || [];
+      const a = notes.get(idA);
+      const b = notes.get(idB);
+      if (a && b) connectNotes(a, b);
+    }
+    const maxLabel = Math.max(initialCounter, ...(seenLabels.length ? seenLabels : [initialCounter]));
+    noteCounter = Math.max(noteCounter, maxLabel + 1);
+    onChange?.({ type: 'sync' });
+  }
+
+  function setNoteCounter(next) {
+    noteCounter = Math.max(next, noteCounter);
   }
 
   return {
@@ -112,6 +144,11 @@ export function createNotesManager(scene, reticle, tempVec, setStatus, onChange,
     connectNotes,
     updateLineGeometry,
     recallNote,
-    updateLines
+    updateLines,
+    loadFromData,
+    setNoteCounter,
+    get nextLabelNumber() {
+      return noteCounter;
+    }
   };
 }

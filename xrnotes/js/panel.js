@@ -16,7 +16,7 @@ function makePanelEntry(note) {
   ctx.font = '28px system-ui';
   ctx.fillText('Recall', 16, 100);
   const texture = new THREE.CanvasTexture(canvas);
-  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+  const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true, opacity: 0.85 });
   const geometry = new THREE.PlaneGeometry(width, height);
   const mesh = new THREE.Mesh(geometry, material);
   mesh.userData = { noteId: note.userData.id, isPanelButton: true };
@@ -70,11 +70,19 @@ export function createPanelManager(renderer, tempMatrix) {
     return hits[0]?.object ?? null;
   }
 
+  function setButtonHighlight(btn, active) {
+    if (!btn || !btn.material) return;
+    btn.material.opacity = active ? 1 : 0.85;
+    btn.material.color.setHex(active ? 0x9be1ff : 0xffffff);
+    btn.material.needsUpdate = true;
+  }
+
   return {
     panelButtons,
     refreshPanel,
     updatePanelAttachment,
     panelRaycast,
+    setButtonHighlight,
     get leftHandPanel() {
       return leftHandPanel;
     }
