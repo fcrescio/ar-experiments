@@ -184,7 +184,7 @@
       // Carica il modello GLB
       const loader = new GLTFLoader();
       loader.load(
-        'models/character.glb',
+        '../models/character.glb',
         (gltf) => {
           character = gltf.scene;
           character.traverse((obj) => {
