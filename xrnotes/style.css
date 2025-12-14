@@ -1,0 +1,26 @@
+:root {
+  color-scheme: light dark;
+  --panel-bg: rgba(0, 0, 0, 0.55);
+  --panel-border: rgba(255, 255, 255, 0.15);
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #000;
+  color: #fff;
+}
+
+#session {
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  padding: 6px 10px;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  font-size: 12px;
+  opacity: 0.85;
+  z-index: 10;
+}
