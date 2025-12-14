@@ -6,12 +6,27 @@ import { createPanelManager } from './panel.js';
 import { createInteractions } from './interactions.js';
 import { createTempTools } from './utils.js';
 import { createStorage } from './storage.js';
+import { createHud } from './hud.js';
+import { createControlHints } from './hints.js';
 
 const sessionId = initSessionLabel('session');
 console.log(`[XRNotes] Session ${sessionId}`);
 
+const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+const { scene, camera, renderer, reticle } = setupScene();
+const { raycaster, tempMatrix, tempVec } = createTempTools();
+const panelManager = createPanelManager(renderer, tempMatrix);
+const storage = createStorage(audioContext, setStatus);
+const hud = createHud(camera);
+const hints = createControlHints(renderer);
+hints.setPlacementAvailable(true);
+
 const statusEl = document.getElementById('status');
 const recordingEl = document.getElementById('recording');
+
+function showToast(message, tone = 'info') {
+  hud.showToast(message, tone);
+}
 
 function setStatus(message, tone = 'info') {
   console.log('[XRNotes]', message);
@@ -19,25 +34,23 @@ function setStatus(message, tone = 'info') {
     statusEl.textContent = message;
     statusEl.dataset.tone = tone;
   }
+  hud.setStatus(message, tone);
+  if (tone !== 'info') showToast(message, tone);
 }
 
 function updateRecordingUI({ active, label, elapsed } = {}) {
-  if (!recordingEl) return;
-  if (!active) {
-    recordingEl.classList.remove('active');
-    recordingEl.textContent = 'Recording stopped';
-    return;
+  if (recordingEl) {
+    if (!active) {
+      recordingEl.classList.remove('active');
+      recordingEl.textContent = 'Recording stopped';
+    } else {
+      const time = elapsed ? ` • ${elapsed.toFixed(1)}s` : '';
+      recordingEl.textContent = `Recording ${label || ''}${time}`;
+      recordingEl.classList.add('active');
+    }
   }
-  const time = elapsed ? ` • ${elapsed.toFixed(1)}s` : '';
-  recordingEl.textContent = `Recording ${label || ''}${time}`;
-  recordingEl.classList.add('active');
+  hud.setRecording({ active, label, elapsed });
 }
-
-const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-const { scene, camera, renderer, reticle } = setupScene();
-const { raycaster, tempMatrix, tempVec } = createTempTools();
-const panelManager = createPanelManager(renderer, tempMatrix);
-const storage = createStorage(audioContext, setStatus);
 
 function setRecordingVisual(note, active) {
   if (!note?.material?.emissive) return;
@@ -50,7 +63,8 @@ const recorder = createRecorder(audioContext, setStatus, {
   onRecordingFinished: () => persistState(),
   updateRecordingUI,
   onRecordingStopped: () => updateRecordingUI({ active: false }),
-  setRecordingVisual
+  setRecordingVisual,
+  notify: showToast
 });
 
 function persistState() {
@@ -94,7 +108,9 @@ const interactions = createInteractions({
   panelManager,
   camera,
   setStatus,
-  audioContext
+  audioContext,
+  showToast,
+  onPlacementAvailabilityChanged: (enabled) => hints.setPlacementAvailable(enabled)
 });
 
 function setupControllers() {
@@ -111,6 +127,7 @@ function setupControllers() {
       controller.userData.handedness = event.data.handedness;
       controller.userData.gamepad = event.data.gamepad;
       panelManager.updatePanelAttachment(controllers, notesManager.notes);
+      hints.attach(controllers);
     });
     controller.addEventListener('disconnected', () => {
       controller.userData.gamepad = null;
@@ -188,6 +205,7 @@ function render(timestamp, frame) {
 
   interactions.updateControllers(timestamp);
   notesManager.updateLines();
+  hud.update(timestamp);
 
   notesManager.notes.forEach((note) => {
     if (note.userData.isRecordingGlow && note.material?.emissive) {
