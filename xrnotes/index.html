@@ -18,55 +18,17 @@
       background: #000;
       color: #fff;
     }
-    #ui {
+    #session {
       position: fixed;
       top: 12px;
       left: 12px;
-      right: 12px;
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-      padding: 12px;
+      padding: 6px 10px;
       background: var(--panel-bg);
       border: 1px solid var(--panel-border);
-      border-radius: 12px;
-      backdrop-filter: blur(8px);
-      max-width: 360px;
-      z-index: 10;
-    }
-    #status {
-      font-size: 13px;
-      line-height: 1.4;
-    }
-    .controls {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-      gap: 8px;
-    }
-    button {
-      padding: 10px 12px;
-      background: rgba(255, 255, 255, 0.1);
-      color: inherit;
-      border: 1px solid var(--panel-border);
       border-radius: 10px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: background 0.2s, border-color 0.2s;
-    }
-    button:hover {
-      background: rgba(255, 255, 255, 0.18);
-    }
-    button.active {
-      border-color: var(--accent);
-      box-shadow: 0 0 0 1px rgba(125, 211, 252, 0.45);
-    }
-    #session {
       font-size: 12px;
-      opacity: 0.8;
-    }
-    #reticleHint {
-      font-size: 12px;
-      color: #fbbf24;
+      opacity: 0.85;
+      z-index: 10;
     }
   </style>
   <script type="importmap">
@@ -79,21 +41,7 @@
   </script>
 </head>
 <body>
-  <div id="ui">
-    <div><strong>XR Notes</strong> — spatial audio stickies</div>
-    <div id="session"></div>
-    <div id="status">Load AR, look for the reticle, then record a note and place it in space.</div>
-    <div id="reticleHint" hidden>Move your device to find a surface...</div>
-    <div class="controls">
-      <button id="record">🎙️ Start recording</button>
-      <button id="move" disabled>Move selected</button>
-      <button id="connect" disabled>Connect notes</button>
-    </div>
-    <div class="controls">
-      <button id="clear" disabled>Clear selection</button>
-      <button id="delete" disabled>Delete selected</button>
-    </div>
-  </div>
+  <div id="session"></div>
 
   <script type="module">
     import * as THREE from 'three';
@@ -110,72 +58,71 @@
     })();
     document.getElementById('session').textContent = `Session: ${sessionId}`;
 
-    // DOM references ---------------------------------------------------------
-    const statusEl = document.getElementById('status');
-    const reticleHint = document.getElementById('reticleHint');
-    const recordBtn = document.getElementById('record');
-    const moveBtn = document.getElementById('move');
-    const connectBtn = document.getElementById('connect');
-    const clearBtn = document.getElementById('clear');
-    const deleteBtn = document.getElementById('delete');
-
     // Three.js setup ---------------------------------------------------------
-    let scene, camera, renderer, controller;
+    let scene, camera, renderer;
     let reticle, hitTestSource = null, hitTestSourceRequested = false;
     const raycaster = new THREE.Raycaster();
     const tempMatrix = new THREE.Matrix4();
+    const tempVec = new THREE.Vector3();
+
+    // Controllers ------------------------------------------------------------
+    const controllers = [];
+    let leftHandPanel = null;
+    const panelButtons = new Map();
 
     // Notes data -------------------------------------------------------------
     const notes = new Map();
     const lines = new Set();
-    let selectedNote = null;
     let connectFirst = null;
+    let noteCounter = 1;
 
     // Audio ------------------------------------------------------------------
     const audioContext = new (window.AudioContext || window.webkitAudioContext)();
     let mediaRecorder = null;
     let recordedChunks = [];
     let isRecording = false;
+    let recordingTarget = null;
 
     // Utility ----------------------------------------------------------------
-    const COLOR_POOL = [0x7dd3fc, 0xa78bfa, 0xf472b6, 0xf97316, 0x22c55e, 0x38bdf8];
+    const COLOR_POOL = [0x7dd3fc, 0xa78bfa, 0xf472b6, 0xf97316, 0xf97316, 0x22c55e, 0x38bdf8];
     const pickColor = () => COLOR_POOL[Math.floor(Math.random() * COLOR_POOL.length)];
 
     function setStatus(message) {
-      statusEl.textContent = message;
+      console.log('[XRNotes]', message);
     }
 
-    function setButtons() {
-      moveBtn.disabled = !selectedNote;
-      connectBtn.disabled = notes.size < 2;
-      clearBtn.disabled = !selectedNote && !connectFirst;
-      deleteBtn.disabled = !selectedNote;
-      connectBtn.classList.toggle('active', !!connectFirst);
+    function setNoteHighlight(mesh, active) {
+      if (mesh?.material?.emissive) {
+        mesh.material.emissive.setHex(active ? 0x222222 : 0x000000);
+      }
     }
 
     // Recording --------------------------------------------------------------
-    async function startRecording() {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        setStatus('Audio recording is not supported in this browser.');
-        return;
-      }
-      if (isRecording) return;
+    async function startRecordingFor(note) {
+      if (!navigator.mediaDevices?.getUserMedia || isRecording) return;
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         recordedChunks = [];
         mediaRecorder = new MediaRecorder(stream);
+        recordingTarget = note;
         mediaRecorder.ondataavailable = (e) => recordedChunks.push(e.data);
         mediaRecorder.onstop = async () => {
-          const blob = new Blob(recordedChunks, { type: 'audio/webm' });
-          const buffer = await blob.arrayBuffer();
-          const audioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
-          placeNote(audioBuffer);
-          stream.getTracks().forEach((t) => t.stop());
+          try {
+            const blob = new Blob(recordedChunks, { type: 'audio/webm' });
+            const buffer = await blob.arrayBuffer();
+            const audioBuffer = await audioContext.decodeAudioData(buffer.slice(0));
+            note.userData.audioBuffer = audioBuffer;
+            setStatus(`Recorded audio for ${note.userData.label}.`);
+          } catch (err) {
+            console.error(err);
+            setStatus('Failed to decode recorded audio.');
+          } finally {
+            stream.getTracks().forEach((t) => t.stop());
+          }
         };
         mediaRecorder.start();
         isRecording = true;
-        recordBtn.textContent = '⏹️ Stop recording';
-        setStatus('Recording... tap stop to place the note at the reticle.');
+        setStatus(`Recording on ${note.userData.label}...`);
       } catch (err) {
         console.error(err);
         setStatus('Could not start recording. Microphone permission is required.');
@@ -186,25 +133,34 @@
       if (!isRecording || !mediaRecorder) return;
       mediaRecorder.stop();
       isRecording = false;
-      recordBtn.textContent = '🎙️ Start recording';
+      recordingTarget = null;
     }
 
     // Notes creation ---------------------------------------------------------
-    function placeNote(audioBuffer) {
-      if (!reticle.visible) {
-        setStatus('Look for a surface: the reticle must be visible to place a note.');
-        return;
-      }
+    function createNoteMesh(position) {
       const id = crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(16).slice(2);
+      const label = `Note ${noteCounter++}`;
       const geometry = new THREE.SphereGeometry(0.055, 32, 32);
       const material = new THREE.MeshStandardMaterial({ color: pickColor(), roughness: 0.4, metalness: 0.05 });
       const mesh = new THREE.Mesh(geometry, material);
-      mesh.position.setFromMatrixPosition(reticle.matrix);
-      mesh.userData = { id, audioBuffer };
+      mesh.position.copy(position);
+      mesh.userData = { id, label, audioBuffer: null };
       scene.add(mesh);
       notes.set(id, mesh);
-      setStatus('Note placed. Tap it to play, move, or connect.');
-      setButtons();
+      refreshPanel();
+      setStatus(`${label} placed.`);
+      return mesh;
+    }
+
+    function placeNoteAtReticle() {
+      if (!reticle.visible) return null;
+      tempVec.setFromMatrixPosition(reticle.matrix);
+      return createNoteMesh(tempVec);
+    }
+
+    function placeNoteAtController(controller) {
+      controller.getWorldPosition(tempVec);
+      return createNoteMesh(tempVec);
     }
 
     function playNote(mesh) {
@@ -222,7 +178,6 @@
       mesh.geometry.dispose();
       mesh.material.dispose();
       notes.delete(id);
-      // remove lines involving this note
       for (const line of Array.from(lines)) {
         if (line.userData.ids.includes(id)) {
           scene.remove(line);
@@ -231,10 +186,8 @@
           lines.delete(line);
         }
       }
-      if (selectedNote === mesh) selectedNote = null;
-      if (connectFirst === mesh) connectFirst = null;
-      setButtons();
-      setStatus('Note removed.');
+      if (recordingTarget === mesh) stopRecording();
+      refreshPanel();
     }
 
     // Connection -------------------------------------------------------------
@@ -246,7 +199,6 @@
       line.userData.ids = [a.userData.id, b.userData.id];
       scene.add(line);
       lines.add(line);
-      setStatus('Notes connected.');
     }
 
     function updateLineGeometry(line) {
@@ -264,62 +216,139 @@
 
     // Selection & interactions ----------------------------------------------
     function setSelection(mesh) {
-      if (selectedNote === mesh) return;
-      if (selectedNote) selectedNote.material.emissive?.setHex?.(0x000000);
-      selectedNote = mesh;
-      if (mesh?.material?.emissive) {
-        mesh.material.emissive.setHex(0x111111);
+      if (connectFirst && connectFirst !== mesh) {
+        connectNotes(connectFirst, mesh);
+        connectFirst = null;
+        return;
       }
-      moveBtn.disabled = !selectedNote;
-      deleteBtn.disabled = !selectedNote;
-      clearBtn.disabled = !selectedNote && !connectFirst;
+      connectFirst = mesh;
+      setStatus(`${mesh.userData.label} selected. Choose another to connect.`);
     }
 
-    function clearSelection() {
-      if (selectedNote?.material?.emissive) {
-        selectedNote.material.emissive.setHex(0x000000);
-      }
-      selectedNote = null;
-      connectFirst = null;
-      setButtons();
-      setStatus('Selection cleared.');
-    }
-
-    function onSelect() {
-      // Raycast vs notes first
+    function updateHover(controller) {
       tempMatrix.identity().extractRotation(controller.matrixWorld);
       raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
       raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
       const intersects = raycaster.intersectObjects(Array.from(notes.values()));
+      const previous = controller.userData.hovered;
+      const next = intersects[0]?.object ?? null;
+      if (previous && previous !== next) {
+        setNoteHighlight(previous, false);
+      }
+      if (next && next !== previous) {
+        setNoteHighlight(next, true);
+      }
+      controller.userData.hovered = next?.userData?.isPanelButton ? null : next;
+      return controller.userData.hovered;
+    }
 
-      if (intersects.length > 0) {
-        const mesh = intersects[0].object;
-        playNote(mesh);
-        if (connectFirst && connectFirst !== mesh) {
-          connectNotes(connectFirst, mesh);
-          connectFirst = null;
-          connectBtn.classList.remove('active');
-        } else {
-          setSelection(mesh);
-        }
-        setButtons();
+    function handleSelect(controller) {
+      const hovered = controller.userData.hovered;
+      if (isRecording) return;
+      if (hovered?.userData?.isPanelButton) {
+        recallNote(hovered.userData.noteId);
         return;
       }
-
-      if (!reticle.visible) {
-        setStatus('Move your device to find a surface to place or move notes.');
+      if (hovered) {
+        setSelection(hovered);
+        playNote(hovered);
         return;
       }
-
-      if (selectedNote) {
-        selectedNote.position.setFromMatrixPosition(reticle.matrix);
-        for (const line of lines) {
-          if (line.userData.ids.includes(selectedNote.userData.id)) {
-            updateLineGeometry(line);
-          }
-        }
-        setStatus('Note moved to new position.');
+      const placed = placeNoteAtReticle();
+      if (placed) {
+        setSelection(placed);
       }
+    }
+
+    function handleSelectStart(controller) {
+      const hovered = controller.userData.hovered;
+      if (hovered && !hovered.userData?.isPanelButton) {
+        startRecordingFor(hovered);
+      }
+    }
+
+    function handleSelectEnd() {
+      if (isRecording) stopRecording();
+    }
+
+    function recallNote(id) {
+      const mesh = notes.get(id);
+      if (!mesh) return;
+      camera.getWorldDirection(tempVec);
+      tempVec.normalize().multiplyScalar(0.6);
+      const targetPos = new THREE.Vector3();
+      targetPos.copy(camera.position).add(tempVec);
+      mesh.position.copy(targetPos);
+      for (const line of lines) {
+        if (line.userData.ids.includes(id)) updateLineGeometry(line);
+      }
+      setStatus(`${mesh.userData.label} moved in front of you.`);
+    }
+
+    function makePanelEntry(note) {
+      const width = 0.24;
+      const height = 0.05;
+      const canvas = document.createElement('canvas');
+      canvas.width = 512;
+      canvas.height = 128;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = 'rgba(20,20,20,0.9)';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = '#7dd3fc';
+      ctx.font = 'bold 36px system-ui';
+      ctx.fillText(note.userData.label, 16, 48);
+      ctx.fillStyle = '#fff';
+      ctx.font = '28px system-ui';
+      ctx.fillText('Recall', 16, 100);
+      const texture = new THREE.CanvasTexture(canvas);
+      const material = new THREE.MeshBasicMaterial({ map: texture, transparent: true });
+      const geometry = new THREE.PlaneGeometry(width, height);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.userData = { noteId: note.userData.id, isPanelButton: true };
+      return mesh;
+    }
+
+    function refreshPanel() {
+      if (!leftHandPanel) return;
+      panelButtons.forEach((mesh) => leftHandPanel.remove(mesh));
+      panelButtons.clear();
+      let y = 0.08;
+      for (const note of notes.values()) {
+        const btn = makePanelEntry(note);
+        btn.position.set(0, y, 0);
+        leftHandPanel.add(btn);
+        panelButtons.set(note.userData.id, btn);
+        y -= 0.07;
+      }
+    }
+
+    function updatePanelAttachment() {
+      const left = controllers.find((c) => c.userData.handedness === 'left');
+      if (!left || leftHandPanel) return;
+      const grip = renderer.xr.getControllerGrip(left.userData.index);
+      leftHandPanel = new THREE.Group();
+      const background = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.3, 0.32),
+        new THREE.MeshBasicMaterial({ color: 0x000000, opacity: 0.6, transparent: true })
+      );
+      background.position.set(0, 0.03, -0.04);
+      leftHandPanel.add(background);
+      leftHandPanel.position.set(0.05, 0.12, -0.15);
+      grip.add(leftHandPanel);
+      refreshPanel();
+    }
+
+    function panelRaycast(controller) {
+      if (!leftHandPanel) return null;
+      const objects = Array.from(panelButtons.values());
+      if (!objects.length) return null;
+      const origin = new THREE.Vector3();
+      const direction = new THREE.Vector3(0, 0, -1);
+      origin.setFromMatrixPosition(controller.matrixWorld);
+      direction.applyMatrix4(tempMatrix.identity().extractRotation(controller.matrixWorld));
+      raycaster.set(origin, direction);
+      const hits = raycaster.intersectObjects(objects, true);
+      return hits[0]?.object ?? null;
     }
 
     // XR initialization ------------------------------------------------------
@@ -353,9 +382,25 @@
       reticle.visible = false;
       scene.add(reticle);
 
-      controller = renderer.xr.getController(0);
-      controller.addEventListener('select', onSelect);
-      scene.add(controller);
+      for (let i = 0; i < 2; i++) {
+        const controller = renderer.xr.getController(i);
+        controller.userData.index = i;
+        controller.userData.hovered = null;
+        controller.userData.buttonAPressed = false;
+        controller.addEventListener('select', () => handleSelect(controller));
+        controller.addEventListener('selectstart', () => handleSelectStart(controller));
+        controller.addEventListener('selectend', handleSelectEnd);
+        controller.addEventListener('connected', (event) => {
+          controller.userData.handedness = event.data.handedness;
+          controller.userData.gamepad = event.data.gamepad;
+          updatePanelAttachment();
+        });
+        controller.addEventListener('disconnected', () => {
+          controller.userData.gamepad = null;
+        });
+        scene.add(controller);
+        controllers.push(controller);
+      }
 
       window.addEventListener('resize', onWindowResize);
     }
@@ -394,49 +439,36 @@
             const pose = hit.getPose(referenceSpace);
             reticle.visible = true;
             reticle.matrix.fromArray(pose.transform.matrix);
-            reticleHint.hidden = true;
           } else {
             reticle.visible = false;
-            reticleHint.hidden = false;
           }
         }
+      }
+
+      // Controller driven interactions
+      for (const controller of controllers) {
+        updateHover(controller);
+        const btn = panelRaycast(controller);
+        if (btn && controller.userData.hovered !== btn) {
+          controller.userData.hovered = btn;
+        }
+
+        const gamepad = controller.userData.gamepad;
+        const aPressed = gamepad?.buttons?.[4]?.pressed;
+        if (aPressed && !controller.userData.buttonAPressed) {
+          placeNoteAtController(controller);
+        }
+        controller.userData.buttonAPressed = !!aPressed;
+      }
+
+      // Update lines if controllers moved selected points
+      for (const line of lines) {
+        updateLineGeometry(line);
       }
 
       renderer.render(scene, camera);
     }
 
-    // UI bindings ------------------------------------------------------------
-    recordBtn.addEventListener('click', () => {
-      if (!isRecording) {
-        startRecording();
-      } else {
-        stopRecording();
-      }
-    });
-
-    moveBtn.addEventListener('click', () => {
-      if (!selectedNote) return;
-      setStatus('Aim at a new spot and tap the screen/controller to move the note.');
-    });
-
-    connectBtn.addEventListener('click', () => {
-      if (!selectedNote) {
-        setStatus('Select a note first, then tap Connect.');
-        return;
-      }
-      connectFirst = selectedNote;
-      connectBtn.classList.add('active');
-      setStatus('Select another note to draw a line between them.');
-      setButtons();
-    });
-
-    clearBtn.addEventListener('click', clearSelection);
-
-    deleteBtn.addEventListener('click', () => {
-      if (selectedNote) removeNote(selectedNote);
-    });
-
-    setButtons();
     init();
     animate();
   </script>
