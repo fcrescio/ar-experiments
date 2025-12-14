@@ -1,6 +1,6 @@
 import { setNoteHighlight } from './utils.js';
 
-const PRIMARY_BUTTON_CANDIDATES = [4, 0, 1];
+const PRIMARY_BUTTON_CANDIDATES = [4, 1, 3, 2, 5, 0];
 
 function getActionButtonIndex(controller) {
   const handedness = controller.userData.handedness;
@@ -26,17 +26,23 @@ export function createInteractions({
   panelManager,
   camera,
   setStatus,
-  audioContext
+  audioContext,
+  showToast,
+  onPlacementAvailabilityChanged
 }) {
   let connectFirst = null;
+  let lastSelectedNote = null;
+  let placementEnabled = true;
 
   function setSelection(mesh) {
     if (connectFirst && connectFirst !== mesh) {
       notesManager.connectNotes(connectFirst, mesh);
       connectFirst = null;
+      lastSelectedNote = mesh;
       return;
     }
     connectFirst = mesh;
+    lastSelectedNote = mesh;
     setStatus?.(`${mesh.userData.label} selected. Choose another to connect.`);
   }
 
@@ -91,6 +97,8 @@ export function createInteractions({
   }
 
   function updateControllers(timestamp) {
+    let nextPlacementEnabled = false;
+    let sawGamepad = false;
     for (const controller of controllers) {
       updateNoteHover(controller);
       const btn = panelManager.panelRaycast(controller, raycaster);
@@ -103,13 +111,54 @@ export function createInteractions({
       const gamepad = controller.userData.gamepad;
       const actionIndex = getActionButtonIndex(controller);
       const actionPressed = actionIndex !== null && gamepad?.buttons?.[actionIndex]?.pressed;
+      const usingTrigger = actionIndex === 0;
+      if (gamepad) sawGamepad = true;
+      if (!usingTrigger && actionIndex !== null) nextPlacementEnabled = true;
+      const hoveredNote = controller.userData.hoveredNote;
       if (recorder.isRecording() && gamepad?.buttons?.[1]?.pressed) {
         recorder.cancel();
       }
-      if (actionPressed && !controller.userData.actionPressed) {
-        notesManager.placeNoteAtController(controller);
+      controller.userData.actionState = controller.userData.actionState || {
+        pressed: false,
+        handled: false,
+        startedAt: 0
+      };
+      const state = controller.userData.actionState;
+
+      if (actionPressed && !state.pressed) {
+        state.pressed = true;
+        state.handled = false;
+        state.startedAt = timestamp;
       }
-      controller.userData.actionPressed = !!actionPressed;
+
+      if (actionPressed && state.pressed && !state.handled) {
+        const elapsed = timestamp - state.startedAt;
+        const recordingTarget = hoveredNote || lastSelectedNote;
+        if (recordingTarget && elapsed > 350) {
+          recorder.startRecordingFor(recordingTarget);
+          state.handled = true;
+        }
+      }
+
+      if (!actionPressed && state.pressed) {
+        const duration = timestamp - state.startedAt;
+        if (!state.handled && duration < 350 && !usingTrigger && !hoveredNote) {
+          const placed = notesManager.placeNoteAtController(controller);
+          if (placed) setSelection(placed);
+        }
+        state.pressed = false;
+        state.handled = false;
+        state.startedAt = 0;
+      }
+
+      controller.userData.actionState = state;
+    }
+    if (sawGamepad && placementEnabled !== nextPlacementEnabled) {
+      placementEnabled = nextPlacementEnabled;
+      onPlacementAvailabilityChanged?.(placementEnabled);
+      if (!placementEnabled) {
+        showToast?.('Controller placement disabled on trigger', 'warn');
+      }
     }
     recorder.update(timestamp);
   }

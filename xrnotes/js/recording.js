@@ -2,7 +2,8 @@ export function createRecorder(audioContext, setStatus, {
   onRecordingFinished,
   updateRecordingUI,
   onRecordingStopped,
-  setRecordingVisual
+  setRecordingVisual,
+  notify
 } = {}) {
   let mediaRecorder = null;
   let mediaStream = null;
@@ -39,6 +40,7 @@ export function createRecorder(audioContext, setStatus, {
         } catch (err) {
           console.error(err);
           setStatus?.('Failed to decode recorded audio.');
+          notify?.('Failed to decode audio', 'error');
         } finally {
           mediaStream?.getTracks().forEach((t) => t.stop());
           mediaStream = null;
@@ -51,9 +53,11 @@ export function createRecorder(audioContext, setStatus, {
       setRecordingVisual?.(note, true);
       updateRecordingUI?.({ active: true, label: note.userData.label });
       setStatus?.(`Recording on ${note.userData.label}...`);
+      notify?.(`Recording on ${note.userData.label}`);
     } catch (err) {
       console.error(err);
       setStatus?.('Could not start recording. Microphone permission is required.');
+      notify?.('Mic permission denied or unavailable', 'error');
     }
   }
 
@@ -65,6 +69,9 @@ export function createRecorder(audioContext, setStatus, {
     recordingTarget = null;
     recordingStart = null;
     onRecordingStopped?.();
+    if (canceled) {
+      notify?.('Recording canceled', 'warn');
+    }
   }
 
   function stopIfTarget(mesh) {
