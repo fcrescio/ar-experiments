@@ -19,6 +19,10 @@ export class Drone {
     this.modelRoot = null;
     this.mixer = null;
     this.ready = false;              // diventa true quando il glb è caricato
+    this._fallbackTimer = null;
+    this._fallbackTriggered = false;
+    this._loadWarningEl = null;
+    this._placeholderRoot = null;
 
     scene.add(this.mesh);
 
@@ -35,9 +39,25 @@ export class Drone {
 
     // --- CARICAMENTO MODELLO GLB ---
     const loader = new GLTFLoader();
+    this._fallbackTimer = setTimeout(() => {
+      this._usePlaceholder(
+        'Drone model load timed out; using placeholder so the encounter can start.'
+      );
+    }, 6000);
     loader.load(
       'assets/training_droid.glb',    // path relativo a index.html
       (gltf) => {
+        if (this._fallbackTimer) {
+          clearTimeout(this._fallbackTimer);
+          this._fallbackTimer = null;
+        }
+
+        // se era stato creato un placeholder, rimuovilo e sostituiscilo con il modello reale
+        if (this._placeholderRoot) {
+          this.mesh.remove(this._placeholderRoot);
+          this._placeholderRoot = null;
+        }
+
         this.modelRoot = gltf.scene;
 
         // opzionale: scala e orientamento del modello
@@ -68,6 +88,9 @@ export class Drone {
       undefined,
       (err) => {
         console.error('Errore nel caricamento del drone GLB:', err);
+        this._usePlaceholder(
+          'Drone model failed to load; using placeholder so gameplay can continue.'
+        );
       }
     );
 
@@ -200,6 +223,96 @@ export class Drone {
     const maxTilt = THREE.MathUtils.degToRad(12); // 12°
     this.wobbleX = THREE.MathUtils.randFloatSpread(maxTilt);
     this.wobbleZ = THREE.MathUtils.randFloatSpread(maxTilt);
+  }
+
+
+  _usePlaceholder(reason) {
+    if (this._fallbackTriggered) return;
+    this._fallbackTriggered = true;
+
+    if (this._fallbackTimer) {
+      clearTimeout(this._fallbackTimer);
+      this._fallbackTimer = null;
+    }
+
+    if (DEBUG) console.warn(reason);
+
+    const placeholderMat = new THREE.MeshStandardMaterial({
+      color: 0x99bbee,
+      emissive: 0x334466,
+      roughness: 0.75,
+      metalness: 0.15,
+    });
+
+    const shell = new THREE.Mesh(
+      new THREE.SphereGeometry(0.12, 24, 16),
+      placeholderMat
+    );
+
+    const eye = new THREE.Mesh(
+      new THREE.OctahedronGeometry(0.05),
+      new THREE.MeshStandardMaterial({ color: 0x112244, emissive: 0x223377 })
+    );
+    eye.position.set(0, 0.03, 0.11);
+
+    const fins = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.02, 0.09, 0.14, 6, 1, true),
+      new THREE.MeshStandardMaterial({
+        color: 0x6688ff,
+        emissive: 0x223377,
+        transparent: true,
+        opacity: 0.65,
+        side: THREE.DoubleSide,
+      })
+    );
+    fins.rotation.x = Math.PI * 0.5;
+
+    this._placeholderRoot = new THREE.Group();
+    this._placeholderRoot.add(shell, eye, fins);
+    this.mesh.add(this._placeholderRoot);
+    this.modelRoot = this._placeholderRoot;
+
+    this.ready = true;
+
+    this._showLoadWarning(
+      '⚠️ Drone model unavailable – using a simplified placeholder.'
+    );
+  }
+
+
+  _showLoadWarning(message) {
+    if (typeof document === 'undefined' || this._loadWarningEl) return;
+
+    const el = document.createElement('div');
+    el.textContent = message;
+    Object.assign(el.style, {
+      position: 'fixed',
+      top: '16px',
+      right: '16px',
+      padding: '10px 14px',
+      background: 'rgba(20, 24, 35, 0.92)',
+      color: '#f7f7f7',
+      fontFamily: 'sans-serif',
+      fontSize: '14px',
+      borderRadius: '8px',
+      boxShadow: '0 6px 18px rgba(0,0,0,0.3)',
+      zIndex: '9999',
+    });
+
+    document.body.appendChild(el);
+    this._loadWarningEl = el;
+
+    setTimeout(() => {
+      if (!this._loadWarningEl) return;
+      this._loadWarningEl.style.transition = 'opacity 0.5s ease';
+      this._loadWarningEl.style.opacity = '0';
+      setTimeout(() => {
+        if (this._loadWarningEl && this._loadWarningEl.parentElement) {
+          this._loadWarningEl.parentElement.removeChild(this._loadWarningEl);
+        }
+        this._loadWarningEl = null;
+      }, 600);
+    }, 4000);
   }
 
 
