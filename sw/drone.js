@@ -3,6 +3,8 @@ import { THREE } from './scene.js';
 import { DEBUG } from './config.js';
 import { SABER_LENGTH, SABER_EFFECTIVE_RADIUS } from './saber.js';
 
+const PLAYER_RADIUS = 0.15;
+
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 
 export class Drone {
@@ -175,6 +177,7 @@ export class Drone {
     this._tmpVelDelta = new THREE.Vector3();
     this._tmpQuat = new THREE.Quaternion();
     this._tmpYAxis = new THREE.Vector3(0, 1, 0);
+    this._tmpClosestToPlayer = new THREE.Vector3();
   }
 
   randomOffset(radius) {
@@ -476,6 +479,9 @@ export class Drone {
       // posizione a fine frame
       const boltEnd = bolt.mesh.position;
 
+      // segmento percorso in questo frame
+      this._tmpSegU.copy(boltEnd).sub(boltStart);
+
       // età del colpo
       bolt.age += dt;
 
@@ -486,16 +492,34 @@ export class Drone {
         continue;
       }
 
-      // colpisce il giocatore (per ora controllo puntuale a fine frame)
-      if (
-        bolt.mesh.position.distanceTo(this._tmpCameraPos) < 0.15 &&
-        !bolt.reflected
-      ) {
-	this._playHitSound(this.camera);
-        if (this.onPlayerHit) this.onPlayerHit();
-        this.scene.remove(bolt.mesh);
-        this.bolts.splice(i, 1);
-        continue;
+      // colpisce il giocatore (collisione swept lungo il segmento del frame)
+      if (!bolt.reflected) {
+        const segLenSq = this._tmpSegU.lengthSq();
+
+        if (segLenSq > 1e-8) {
+          // proiezione del centro del giocatore sul segmento boltStart-boltEnd
+          const t = THREE.MathUtils.clamp(
+            this._tmpSegW.copy(this._tmpCameraPos).sub(boltStart).dot(this._tmpSegU) /
+              segLenSq,
+            0,
+            1
+          );
+
+          this._tmpClosestToPlayer
+            .copy(boltStart)
+            .addScaledVector(this._tmpSegU, t);
+        } else {
+          this._tmpClosestToPlayer.copy(boltStart);
+        }
+
+        if (this._tmpClosestToPlayer.distanceTo(this._tmpCameraPos) < PLAYER_RADIUS) {
+          bolt.mesh.position.copy(this._tmpClosestToPlayer);
+          this._playHitSound(this.camera);
+          if (this.onPlayerHit) this.onPlayerHit();
+          this.scene.remove(bolt.mesh);
+          this.bolts.splice(i, 1);
+          continue;
+        }
       }
 
       // --- collisione continuo bolt-lama (segmento-segmento) ---
