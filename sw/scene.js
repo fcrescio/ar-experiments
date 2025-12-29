@@ -6,8 +6,9 @@ import { USE_XR, USE_PASSTHROUGH } from './config.js';
 export { THREE };
 
 export function createRenderer() {
+  const hasXRSupport = typeof navigator !== 'undefined' && 'xr' in navigator;
   // In AR (passthrough) serve il canale alpha, altrimenti nero.
-  const useAlpha = USE_XR && USE_PASSTHROUGH;
+  const useAlpha = hasXRSupport && USE_XR && USE_PASSTHROUGH;
 
   const renderer = new THREE.WebGLRenderer({
     antialias: true,
@@ -27,10 +28,12 @@ export function createRenderer() {
 }
 
 export function createScene() {
+  const hasXRSupport = typeof navigator !== 'undefined' && 'xr' in navigator;
+  const usePassthrough = hasXRSupport && USE_XR && USE_PASSTHROUGH;
   const scene = new THREE.Scene();
 
   // In AR il "background" è il mondo reale, quindi niente colore.
-  if (!(USE_XR && USE_PASSTHROUGH)) {
+  if (!usePassthrough) {
     scene.background = new THREE.Color(0x000000);
     scene.fog = new THREE.FogExp2(0x000000, 0.08);
   }
@@ -45,7 +48,7 @@ export function createScene() {
 
   // In AR potresti voler evitare il pavimento per non "coprire" il mondo reale.
   // Qui lo mettiamo solo se NON siamo in passthrough.
-  if (!(USE_XR && USE_PASSTHROUGH)) {
+  if (!usePassthrough) {
     const floorGeo = new THREE.CircleGeometry(10, 32);
     const floorMat = new THREE.MeshPhongMaterial({
       color: 0x111111,
