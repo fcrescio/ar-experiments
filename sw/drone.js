@@ -13,6 +13,7 @@ export class Drone {
     this.camera = camera;
     this.audioListener = audioListener;
     this.audioCtx = (audioListener ? audioListener.context : null);
+    this._activeAudioCleanups = new Set();
 
     // --- mesh del drone ---
     this.mesh = new THREE.Group();   // placeholder
@@ -743,11 +744,26 @@ export class Drone {
     osc.stop(now + 0.2);
 
     // Pulizia (rimuovi il nodo dalla scena quando finisce)
-    osc.onended = () => {
+    const cleanup = () => {
+      if (cleanup._done) return;
+      cleanup._done = true;
+      osc.onended = null;
+      try {
+        osc.stop();
+      } catch (e) {
+        // oscillator already stopped
+      }
+      osc.disconnect();
+      gain.disconnect();
       if (audio.parent) {
         audio.parent.remove(audio);
       }
+      this._activeAudioCleanups.delete(cleanup);
     };
+    cleanup._done = false;
+
+    this._activeAudioCleanups.add(cleanup);
+    osc.onended = cleanup;
   }
 
   _playDeflectSound(parentObject3D) {
@@ -783,11 +799,24 @@ export class Drone {
     osc.start(now);
     osc.stop(now + 0.13);
 
-    osc.onended = () => {
+    const cleanup = () => {
+      if (cleanup._done) return;
+      cleanup._done = true;
+      osc.onended = null;
+      try {
+        osc.stop();
+      } catch (e) {}
+      osc.disconnect();
+      gain.disconnect();
       if (audio.parent) {
         audio.parent.remove(audio);
       }
+      this._activeAudioCleanups.delete(cleanup);
     };
+    cleanup._done = false;
+
+    this._activeAudioCleanups.add(cleanup);
+    osc.onended = cleanup;
   }
 
   _playHitSound(parentObject3D) {
@@ -823,11 +852,24 @@ export class Drone {
     osc.start(now);
     osc.stop(now + 0.22);
 
-    osc.onended = () => {
+    const cleanup = () => {
+      if (cleanup._done) return;
+      cleanup._done = true;
+      osc.onended = null;
+      try {
+        osc.stop();
+      } catch (e) {}
+      osc.disconnect();
+      gain.disconnect();
       if (audio.parent) {
         audio.parent.remove(audio);
       }
+      this._activeAudioCleanups.delete(cleanup);
     };
+    cleanup._done = false;
+
+    this._activeAudioCleanups.add(cleanup);
+    osc.onended = cleanup;
   }
 
 
@@ -866,6 +908,18 @@ export class Drone {
     }
 
     this._updateBolts(dt, saber);
+  }
+
+  dispose() {
+    this.disposeAudio();
+  }
+
+  disposeAudio() {
+    if (!this._activeAudioCleanups) return;
+    for (const cleanup of Array.from(this._activeAudioCleanups)) {
+      cleanup();
+    }
+    this._activeAudioCleanups.clear();
   }
 
 }

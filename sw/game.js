@@ -34,5 +34,14 @@ export function setupGame(scene, camera, renderer, isXR, audioListener) {
     // nient’altro, tutto il resto è dentro i moduli
   }
 
-  return { update };
+  function dispose() {
+    if (saber && typeof saber.dispose === 'function') {
+      saber.dispose();
+    }
+    if (drone && typeof drone.dispose === 'function') {
+      drone.dispose();
+    }
+  }
+
+  return { update, dispose };
 }

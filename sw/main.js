@@ -25,6 +25,19 @@ const xrState = setupXROrFlat(renderer, camera);
 // Logica di gioco (drone, colpi, spada)
 const game = setupGame(scene, camera, renderer, xrState.isXR, listener);
 
+let cleanedUp = false;
+const cleanup = () => {
+  if (cleanedUp) return;
+  cleanedUp = true;
+  if (game && typeof game.dispose === 'function') {
+    game.dispose();
+  }
+};
+
+renderer.xr.addEventListener('sessionend', cleanup);
+window.addEventListener('pagehide', cleanup);
+window.addEventListener('beforeunload', cleanup);
+
 // Loop di animazione – funziona sia con XR che senza
 let lastTime = 0;
 

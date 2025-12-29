@@ -75,6 +75,7 @@ export class Saber {
     this.filter = null;
     this.gainNode = null;
     this.audioContext = null;
+    this._audioDisposed = false;
     this.smoothedSpeed = 0;
     this._prevPosForAudio = new THREE.Vector3();
     this._curPosForAudio = new THREE.Vector3();
@@ -157,6 +158,49 @@ export class Saber {
     this._tmpPos = new THREE.Vector3();
     this._tmpDir = new THREE.Vector3();
     this._tmpQuat = new THREE.Quaternion();
+  }
+
+  dispose() {
+    this.disposeAudio();
+  }
+
+  disposeAudio() {
+    if (this._audioDisposed) return;
+    this._audioDisposed = true;
+
+    const oscillators = [this.oscMain1, this.oscMain2, this.oscSub];
+    oscillators.forEach((osc) => {
+      if (osc) {
+        try {
+          osc.stop();
+        } catch (e) {
+          // oscillator might already be stopped
+        }
+        osc.disconnect();
+      }
+    });
+
+    if (this.filter) this.filter.disconnect();
+    if (this.gainNode) this.gainNode.disconnect();
+
+    if (this.audio) {
+      try {
+        this.audio.stop();
+      } catch (e) {
+        // ignore stop errors on already stopped sources
+      }
+      if (this.audio.parent) {
+        this.audio.parent.remove(this.audio);
+      }
+    }
+
+    this.audio = null;
+    this.oscMain1 = null;
+    this.oscMain2 = null;
+    this.oscSub = null;
+    this.filter = null;
+    this.gainNode = null;
+    this.audioContext = null;
   }
 
   _attachToXRController(handedness) {
