@@ -2,11 +2,23 @@
 import { THREE } from './scene.js';
 
 export class ScorePanel3D {
-  constructor(scene) {
+  constructor(scene, camera) {
     this.scene = scene;
+    this.camera = camera;
 
     this.hitsTaken = 0;
     this.hitsDeflected = 0;
+
+    this.followDistance = 1.2;
+    this.minDistance = 0.9;
+    this.maxDistance = 1.6;
+    this.verticalOffset = 0.25;
+    this.smoothing = 0.15;
+
+    this._camWorldPos = new THREE.Vector3();
+    this._camForward = new THREE.Vector3();
+    this._desiredPos = new THREE.Vector3();
+    this._offset = new THREE.Vector3(0, this.verticalOffset, 0);
 
     // canvas per il testo
     this.canvas = document.createElement('canvas');
@@ -26,13 +38,10 @@ export class ScorePanel3D {
 
     this.mesh = new THREE.Mesh(geo, mat);
 
-    // posizione nel mondo – “lontano ma visibile”
-    this.mesh.position.set(1.5, 1.0, -2.0);
-    this.mesh.lookAt(0, 1.6, 0);
-
     scene.add(this.mesh);
 
     this._redraw();
+    this.update();
   }
 
   _redraw() {
@@ -66,5 +75,26 @@ export class ScorePanel3D {
   addHitDeflected() {
     this.hitsDeflected++;
     this._redraw();
+  }
+
+  update() {
+    if (!this.camera) return;
+
+    const clampedDist = THREE.MathUtils.clamp(
+      this.followDistance,
+      this.minDistance,
+      this.maxDistance
+    );
+
+    this.camera.getWorldPosition(this._camWorldPos);
+    this.camera.getWorldDirection(this._camForward);
+
+    this._desiredPos
+      .copy(this._camWorldPos)
+      .addScaledVector(this._camForward, clampedDist)
+      .add(this._offset);
+
+    this.mesh.position.lerp(this._desiredPos, this.smoothing);
+    this.mesh.quaternion.slerp(this.camera.quaternion, this.smoothing);
   }
 }

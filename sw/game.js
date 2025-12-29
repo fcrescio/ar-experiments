@@ -12,7 +12,7 @@ export function setupGame(scene, camera, renderer, isXR, audioListener) {
   const drone = new Drone(scene, camera, audioListener);
 
   // crea pannello punteggio
-  const scorePanel = new ScorePanel3D(scene);
+  const scorePanel = new ScorePanel3D(scene, camera);
 
   // collega callback punteggio
   drone.onPlayerHit = () => {
@@ -30,6 +30,7 @@ export function setupGame(scene, camera, renderer, isXR, audioListener) {
   function update(dt) {
     saber.update(dt);
     drone.update(dt, saber);
+    scorePanel.update();
     // nient’altro, tutto il resto è dentro i moduli
   }
 
