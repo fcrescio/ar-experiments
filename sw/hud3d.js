@@ -9,9 +9,9 @@ export class ScorePanel3D {
     this.hitsTaken = 0;
     this.hitsDeflected = 0;
 
-    this.followDistance = 1.2;
-    this.minDistance = 0.9;
-    this.maxDistance = 1.6;
+    this.followDistance = 3.2;
+    this.minDistance = 3.0;
+    this.maxDistance = 3.6;
     this.verticalOffset = 0.25;
     this.smoothing = 0.15;
 
@@ -19,6 +19,7 @@ export class ScorePanel3D {
     this._camForward = new THREE.Vector3();
     this._desiredPos = new THREE.Vector3();
     this._offset = new THREE.Vector3(0, this.verticalOffset, 0);
+    this._toPanel = new THREE.Vector3();
 
     // canvas per il testo
     this.canvas = document.createElement('canvas');
@@ -80,21 +81,44 @@ export class ScorePanel3D {
   update() {
     if (!this.camera) return;
 
+    this.camera.getWorldPosition(this._camWorldPos);
+    this.camera.getWorldDirection(this._camForward);
+
+    const toPanel = this._toPanel
+      .copy(this.mesh.position)
+      .sub(this._camWorldPos);
+    const distToPanel = toPanel.length();
+
+    // dot product vs camera forward to check visibility; fall back to recenter
+    const normalizedDot = distToPanel > 0.001
+      ? this._camForward.dot(toPanel.normalize())
+      : -1;
+
+    const halfFovRad = this.camera.isPerspectiveCamera
+      ? THREE.MathUtils.degToRad(this.camera.fov * 0.5)
+      : Math.PI * 0.25;
+    const visibilityThreshold = Math.cos(halfFovRad * 0.92);
+
     const clampedDist = THREE.MathUtils.clamp(
       this.followDistance,
       this.minDistance,
       this.maxDistance
     );
 
-    this.camera.getWorldPosition(this._camWorldPos);
-    this.camera.getWorldDirection(this._camForward);
+    const needsRecentering =
+      normalizedDot < visibilityThreshold ||
+      distToPanel < this.minDistance * 0.85 ||
+      distToPanel > this.maxDistance * 1.2;
 
-    this._desiredPos
-      .copy(this._camWorldPos)
-      .addScaledVector(this._camForward, clampedDist)
-      .add(this._offset);
+    if (needsRecentering) {
+      this._desiredPos
+        .copy(this._camWorldPos)
+        .addScaledVector(this._camForward, clampedDist)
+        .add(this._offset);
 
-    this.mesh.position.lerp(this._desiredPos, this.smoothing);
+      this.mesh.position.lerp(this._desiredPos, this.smoothing);
+    }
+
     this.mesh.quaternion.slerp(this.camera.quaternion, this.smoothing);
   }
 }
