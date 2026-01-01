@@ -23,14 +23,81 @@ export class Saber {
       this.bladeThickness,
       this.bladeThickness,
       SABER_LENGTH,
-      12
+      24
     );
-    const bladeMat = new THREE.MeshBasicMaterial({
-      color: 0x66ccff,
+    const bladeUniforms = {
+      time: { value: 0 },
+      color: { value: new THREE.Color(0x66ccff) },
+      opacity: { value: 0.92 },
+      radius: { value: this.bladeThickness },
+      pulseStrength: { value: 0.2 },
+    };
+    const bladeMat = new THREE.ShaderMaterial({
+      uniforms: bladeUniforms,
       transparent: true,
-      opacity: 0.9,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      vertexShader: `
+        varying vec2 vUv;
+        varying vec3 vPos;
+        void main() {
+          vUv = uv;
+          vPos = position;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform float time;
+        uniform vec3 color;
+        uniform float opacity;
+        uniform float radius;
+        uniform float pulseStrength;
+        varying vec2 vUv;
+        varying vec3 vPos;
+
+        // Cheap 2D noise for shimmer
+        float hash(vec2 p) {
+          p = vec2(dot(p, vec2(127.1, 311.7)), dot(p, vec2(269.5, 183.3)));
+          return fract(sin(p.x + p.y) * 43758.5453);
+        }
+
+        float noise(vec2 p) {
+          vec2 i = floor(p);
+          vec2 f = fract(p);
+          float a = hash(i);
+          float b = hash(i + vec2(1.0, 0.0));
+          float c = hash(i + vec2(0.0, 1.0));
+          float d = hash(i + vec2(1.0, 1.0));
+          vec2 u = f * f * (3.0 - 2.0 * f);
+          return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+        }
+
+        void main() {
+          // Radial falloff so the blade edges stay soft
+          float radial = clamp(length(vPos.xz) / radius, 0.0, 1.0);
+          float core = smoothstep(0.25, 0.0, radial);
+          float glow = smoothstep(1.2, 0.1, radial);
+
+          // Subtle taper toward the tip and base for a more organic falloff
+          float edgeFade = smoothstep(0.02, 0.12, vUv.y) * (1.0 - smoothstep(0.88, 1.0, vUv.y));
+
+          // Layered pulse: slow breathing + faster micro flicker
+          float slowPulse = sin(time * 1.6) * 0.5 + 0.5;
+          float fastPulse = noise(vec2(vUv.y * 6.0, time * 12.0));
+          float pulse = 1.0 + pulseStrength * (slowPulse * 0.6 + fastPulse * 0.4);
+
+          vec3 finalColor = color * (1.2 * core + 0.45 * glow);
+
+          float alpha = opacity * edgeFade * (core + glow * 0.6) * pulse;
+          gl_FragColor = vec4(finalColor, alpha);
+        }
+      `,
     });
     this.blade = new THREE.Mesh(bladeGeo, bladeMat);
+    this.blade.material.uniformsNeedUpdate = true;
+    this.bladeMaterial = bladeMat;
+    this.bladeUniforms = bladeUniforms;
+    this.elapsedTime = 0;
 
     this.hilt = new THREE.Group();   // placeholder
     this.hiltModelRoot = null;
@@ -242,6 +309,11 @@ export class Saber {
     return target;
   }
   update(dt) {
+    if (dt > 0 && this.bladeMaterial && this.bladeUniforms) {
+      this.elapsedTime += dt;
+      this.bladeUniforms.time.value = this.elapsedTime;
+    }
+
     if (
       this.isXR &&
       !this.attachedToController &&
