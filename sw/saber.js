@@ -16,7 +16,8 @@ export class Saber {
     this.fallbackAttachedToCamera = false;
     this.audioListener = audioListener;
 
-    this.bladeThickness = 0.01;
+    this.bladeThickness = 0.012;
+    this.bladeFalloffRadius = 0.05;
 
     // --- crea geometria lama + impugnatura ---
     const bladeGeo = new THREE.CylinderGeometry(
@@ -29,7 +30,7 @@ export class Saber {
       time: { value: 0 },
       color: { value: new THREE.Color(0x66ccff) },
       opacity: { value: 0.92 },
-      radius: { value: this.bladeThickness },
+      radius: { value: this.bladeFalloffRadius },
       pulseStrength: { value: 0.2 },
     };
     const bladeMat = new THREE.ShaderMaterial({
